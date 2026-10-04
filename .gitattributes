@@ -1,0 +1,42 @@
+# 换行符统一策略
+#
+# 为什么需要这个文件：
+#   项目在 Windows 上开发，默认换行是 CRLF。但 mvnw 是 Linux/macOS 用的
+#   shell 脚本，一旦被提交成 CRLF，在 Linux 上执行会报
+#   "/usr/bin/env: 'sh\r': No such file or directory"。所以必须显式声明。
+#   同时让仓库内部统一用 LF，避免每次提交都出现"整文件改动"的假 diff。
+
+# 默认：Git 自动识别文本/二进制
+* text=auto
+
+# 源码与配置：仓库内统一 LF
+*.java       text eol=lf
+*.xml        text eol=lf
+*.yml        text eol=lf
+*.yaml       text eol=lf
+*.sql        text eol=lf
+*.md         text eol=lf
+*.properties text eol=lf
+*.sh         text eol=lf
+mvnw         text eol=lf
+
+# 根目录这几个没有扩展名的文件也要显式声明，
+# 否则会跟着 core.autocrlf 来回转换，每次 add 都跳警告
+.gitattributes text eol=lf
+.gitignore     text eol=lf
+LICENSE        text eol=lf
+
+# Windows 批处理必须是 CRLF，否则某些环境下会执行异常
+*.cmd        text eol=crlf
+*.bat        text eol=crlf
+mvnw.cmd     text eol=crlf
+
+# 二进制：不做行尾转换、不做合并
+*.jar   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.woff  binary
+*.woff2 binary
