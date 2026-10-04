@@ -12,6 +12,7 @@ spring:
       password: ${REDIS_PASSWORD:}
       database: ${REDIS_DB:0}
 
-mybatis-plus:
-  configuration:
-    log-impl:
+# 说明：这里不再单独配置 mybatis-plus。
+# 生产环境的 SQL 日志必须关闭（既拖性能，也会把用户数据写进日志文件），
+# 而 application.yml 里的默认配置本来就不打印 SQL，所以删掉即可，
+# 其余通用配置（驼峰映射、逻辑删除）继续由 application.yml 提供。
