@@ -15,6 +15,13 @@
 --   5. user → sys_user；主键去掉 AUTO_INCREMENT（与 MyBatis-Plus 的 assign_id 对齐）
 -- ============================================================================
 
+-- ⚠️ 这一行不能删，也不能往下挪。
+-- Windows 下的 mysql 命令行客户端默认跟随系统代码页（中文系统是 GBK），
+-- 而本文件是 UTF-8 编码。不声明的话，Server 会把 UTF-8 的中文字节按 GBK 解读，
+-- 结果就是「上午」被存成「涓婂崍」这种乱码 —— 表面上不报错，数据已经坏了。
+-- SET NAMES 显式告诉 Server：我发过来的字节是 utf8mb4。
+SET NAMES utf8mb4;
+
 USE seat_reservation;
 
 -- 兼容清理：早期版本把用户表命名为 `user`，而 `user` 也是 MySQL 系统库的名字，
