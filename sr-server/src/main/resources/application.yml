@@ -7,12 +7,16 @@ spring:
   profiles:
     active: dev
 
+sr:
+  jwt:
+    expire-minutes: 30
+
 mybatis-plus:
   configuration:
     map-underscore-to-camel-case: true
   global-config:
     db-config:
-      id-type: auto
+      id-type: assign_id
       logic-delete-field: deleted
       logic-delete-value: 1
       logic-not-delete-value: 0

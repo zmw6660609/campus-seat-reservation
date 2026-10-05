@@ -20,6 +20,7 @@
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		<project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 		<mybatis-plus.version>3.5.7</mybatis-plus.version>
+		<jjwt.version>0.12.6</jjwt.version>
 	</properties>
 	<modules>
 		<module>sr-common</module>

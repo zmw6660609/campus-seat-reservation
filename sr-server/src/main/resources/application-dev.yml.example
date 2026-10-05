@@ -11,6 +11,10 @@ spring:
       port: 6379
       database: 0
 
+sr:
+  jwt:
+    secret: 请替换为你自己生成的至少 32 位随机字符串
+
 mybatis-plus:
   configuration:
     log-impl: org.apache.ibatis.logging.stdout.StdOutImpl

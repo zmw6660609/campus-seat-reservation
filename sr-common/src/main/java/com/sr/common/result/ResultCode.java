@@ -15,7 +15,10 @@ public enum ResultCode {
     RESERVATION_STATUS_ILLEGAL(1003,"预约状态非法"),
     RESERVE_TIME_SLOT_ILLEGAL(1004,"预约时间段非法"),
     CREDIT_NOT_ENOUGH(1005,"用户积分不足"),
-    REPEAT_SUBMIT(1006,"请勿重复提交");
+    REPEAT_SUBMIT(1006,"请勿重复提交"),
+    USERNAME_EXISTS(1007, "该用户名已被注册"),
+    USERNAME_OR_PASSWORD_ERROR(1008, "用户名或密码错误"),
+    USER_DISABLED(1009, "账号已被禁用");
 
     private final Integer code;
     private final String msg;
