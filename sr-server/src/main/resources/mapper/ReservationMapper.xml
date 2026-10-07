@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.sr.mapper.ReservationMapper">
+
+    <select id="selectAvailableSeats" resultType="com.sr.pojo.entity.Seat">
+        SELECT s.*
+        FROM seat s
+                 LEFT JOIN reservation r
+                           ON r.seat_id = s.id
+                               AND r.reserve_date = #{date}
+                               AND r.slot_id = #{slotId}
+                               AND r.occupy_flag = 1
+        WHERE s.room_id = #{roomId}
+          AND s.status = 1
+          AND s.deleted = 0
+          AND r.id IS NULL
+        ORDER BY s.row_num, s.col_num;
+    </select>
+
+</mapper>

@@ -10,6 +10,8 @@ spring:
 sr:
   jwt:
     expire-minutes: 30
+  reservation:
+    checkin-grace-minutes: 20
 
 mybatis-plus:
   configuration:
