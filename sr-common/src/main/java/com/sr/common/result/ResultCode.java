@@ -18,7 +18,9 @@ public enum ResultCode {
     REPEAT_SUBMIT(1006,"请勿重复提交"),
     USERNAME_EXISTS(1007, "该用户名已被注册"),
     USERNAME_OR_PASSWORD_ERROR(1008, "用户名或密码错误"),
-    USER_DISABLED(1009, "账号已被禁用");
+    USER_DISABLED(1009, "账号已被禁用"),
+    ROOM_CAPACITY_EXCEEDED(1010, "超出该自习室的容量上限"),
+    SEAT_NO_DUPLICATED(1011, "座位编号重复，该自习室可能已生成过座位");
 
     private final Integer code;
     private final String msg;

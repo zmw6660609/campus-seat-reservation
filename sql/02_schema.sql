@@ -15,11 +15,10 @@
 --   5. user → sys_user；主键去掉 AUTO_INCREMENT（与 MyBatis-Plus 的 assign_id 对齐）
 -- ============================================================================
 
--- ⚠️ 这一行不能删，也不能往下挪。
+-- 这一行不能删，也不能往下挪。
 -- Windows 下的 mysql 命令行客户端默认跟随系统代码页（中文系统是 GBK），
--- 而本文件是 UTF-8 编码。不声明的话，Server 会把 UTF-8 的中文字节按 GBK 解读，
--- 结果就是「上午」被存成「涓婂崍」这种乱码 —— 表面上不报错，数据已经坏了。
--- SET NAMES 显式告诉 Server：我发过来的字节是 utf8mb4。
+-- 而本文件是 UTF-8 编码。不声明的话 Server 会把 UTF-8 的中文字节按 GBK 解读，
+-- 「上午」就被存成了「涓婂崍」这种乱码——不报错，但数据已经坏了。
 SET NAMES utf8mb4;
 
 USE seat_reservation;
@@ -61,8 +60,8 @@ CREATE TABLE `sys_user` (
 -- 2. 自习室表
 -- ============================================================================
 CREATE TABLE `study_room` (
-    `id`          BIGINT UNSIGNED NOT NULL,
-    `room_name`   VARCHAR(100)    NOT NULL                COMMENT '自习室名称',
+    `id`          BIGINT UNSIGNED NOT NULL                COMMENT '主键，雪花ID（表不加 AUTO_INCREMENT）',
+    `name`        VARCHAR(100)    NOT NULL                COMMENT '自习室名称',
     `location`    VARCHAR(200)    NOT NULL DEFAULT ''     COMMENT '位置描述',
     `capacity`    INT             NOT NULL DEFAULT 0      COMMENT '规划容纳上限（只用于"新增座位时校验不超过容量"，不要拿它当实际座位数）',
     `status`      TINYINT         NOT NULL DEFAULT 1      COMMENT '1=启用 0=关闭',
@@ -70,7 +69,7 @@ CREATE TABLE `study_room` (
     `update_time` DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     `deleted`     TINYINT         NOT NULL DEFAULT 0      COMMENT '逻辑删除：0=未删 1=已删',
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_room_name` (`room_name`, `deleted`)
+    UNIQUE KEY `uk_name_deleted` (`name`, `deleted`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT ='自习室';
 
 -- 原字段名 total_seat 改名 capacity 的理由：
@@ -78,23 +77,36 @@ CREATE TABLE `study_room` (
 --   叫 total_seat 会让人以为它是权威值；叫 capacity 才表达的是"上限"。
 --   诚实的数据命名，能省掉未来无数次"这两个数为什么不一样"的排查。
 
+-- ★ status 为什么必须有？★
+--   自习室会被"临时关闭"（装修、考试征用）。没有 status 就无法区分
+--   "这个自习室不存在"和"这个自习室暂停开放"。
+--   注意：这里的 status 是自习室自己的开关；某一天某个时段有没有空位，
+--   由 reservation 表推导，绝对不要混进来。
+
 -- ============================================================================
 -- 3. 座位表
 -- ============================================================================
 CREATE TABLE `seat` (
     `id`          BIGINT UNSIGNED NOT NULL,
-    `room_id`     BIGINT UNSIGNED NOT NULL                COMMENT '所属自习室',
-    `seat_no`     VARCHAR(30)     NOT NULL                COMMENT '座位编号，如 A-03',
-    `row_no`      SMALLINT        NOT NULL DEFAULT 0      COMMENT '第几排（前端画座位图用）',
-    `col_no`      SMALLINT        NOT NULL DEFAULT 0      COMMENT '第几列',
+    `room_id`     BIGINT UNSIGNED NOT NULL                COMMENT '所属自习室（与 reservation.room_id 同名，保持一致）',
+    `seat_no`     VARCHAR(20)     NOT NULL                COMMENT '座位编号，如 A-01',
+    `row_num`     INT             NOT NULL DEFAULT 0      COMMENT '第几排（前端画座位图用）',
+    `col_num`     INT             NOT NULL DEFAULT 0      COMMENT '第几列',
     `status`      TINYINT         NOT NULL DEFAULT 1      COMMENT '物理状态：1=可用 0=停用/维修。（不含"占用"！见下方说明）',
     `create_time` DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `update_time` DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     `deleted`     TINYINT         NOT NULL DEFAULT 0,
     PRIMARY KEY (`id`),
-    UNIQUE KEY `uk_room_seat` (`room_id`, `seat_no`, `deleted`),
-    KEY `idx_room` (`room_id`)
+    UNIQUE KEY `uk_room_seat` (`room_id`, `seat_no`, `deleted`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT ='座位';
+
+-- 没有单独建 KEY idx_room(room_id)：uk_room_seat 的第一列就是 room_id，
+-- 按最左前缀原则，只查 room_id 也能用上这个唯一索引，再建一个是白占空间。
+--
+-- uk_room_seat 保证同一间自习室里座位编号不重复。
+-- 批量生成座位时重复调用会被它拦下——和后面预约防超卖是同一个思路。
+--   带上 deleted 的理由与 study_room 相同：逻辑删除后那一行还在，
+--   不带 deleted 的话，"删掉 A-01 就再也建不了 A-01"。
 
 -- ★★ status 里为什么不能有"占用"？★★
 --   "占用"不是座位的属性，是"座位 × 时段"的属性。
@@ -165,7 +177,7 @@ CREATE TABLE `reservation` (
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT ='预约单';
 
 -- ============================================================================
--- 【本表最重要的三个设计，务必读懂】
+-- 【本表最重要的三个设计】
 --
 -- Q1: 为什么不用 start_time + end_time？
 --
@@ -178,9 +190,9 @@ CREATE TABLE `reservation` (
 --
 --   MySQL 唯一索引有一个特殊规则：**允许多行同时为 NULL**（NULL 不参与唯一性比较）。
 --     · 占用中（status = 1 已预约 / 2 已签到）→ occupy_flag = 1
---       同一座位 + 同一天 + 同一时段，只可能存在一条 → 并发抢座只会成功一单 ✅
+--       同一座位 + 同一天 + 同一时段只可能存在一条，并发抢座只会成功一单
 --     · 已释放（3 已完成 / 4 已取消 / 5 违规）→ occupy_flag = NULL
---       可以存在任意多条 → 座位立刻可以被别人重新预约 ✅
+--       可以存在任意多条，座位立刻可以被别人重新预约
 --
 --   如果写成 1 和 0 两个值，唯一索引会变成"同一座位同一时段只能有一条取消记录"，
 --   第二次取消就写不进去了。

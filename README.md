@@ -39,8 +39,8 @@
 | 部署 | Docker Compose + Nginx |
 
 **明确不引入**：Spring Cloud / Nacos、消息队列、Elasticsearch、分库分表、分布式事务框架。
-理由：这些技术解决的是"多团队、多实例、超大规模"的问题，本项目一个都没有。
-**把一件事做深，比把十个名词堆在简历上有用。**
+理由：这些技术解决的是"多团队、多实例、超大规模"的问题，这个项目一个都没有。
+**把一件事做深，比堆十个名词有用。**
 
 ## 工程结构
 
@@ -48,25 +48,25 @@
 campus-seat-reservation/           父工程：统一版本 + 模块聚合（packaging=pom）
 ├── sql/
 │   ├── 01_init.sql                建库
-│   └── 02_schema.sql              建表（含设计说明，正文即注释）
+│   ├── 02_schema.sql              建表（设计说明写在表定义旁边）
+│   └── 03_verify_unique_index.sql 唯一索引防重复预约的验收脚本
 ├── sr-common/                     通用能力层（与业务无关，可被任意模块依赖）
 │   └── com.sr.common
-│       ├── result/                Result / ResultCode / PageResult    ✅ M1
-│       └── exception/             BizException                        ✅ M1
+│       ├── result/                Result / ResultCode / PageResult
+│       └── exception/             BizException
 ├── sr-pojo/                       领域模型层（只放数据类，不含逻辑）
 │   └── com.sr.pojo
-│       ├── entity/                ✍️ M2 起
-│       ├── dto/  vo/  enums/      ✍️ M2 起
+│       ├── entity/  dto/  vo/  enums/
 └── sr-server/                     业务与接入层（唯一可启动模块）
     └── com.sr
-        ├── controller/            ✅ HealthController
-        ├── service/ impl/         ✍️ M2 起
-        ├── mapper/                ✍️ M2 起
-        ├── redis/                 ✍️ M3：缓存 / 分布式锁 / 延时队列 / 限流
-        ├── task/                  ✍️ M3：定时任务
-        ├── config/                ✅ RedisConfig
-        ├── interceptor/           ✍️ M2：JWT 鉴权
-        └── exception/             ✅ GlobalExceptionHandler
+        ├── controller/           接口层：只做参数校验 + 调用 Service
+        ├── service/ impl/        业务逻辑与事务边界
+        ├── mapper/               MyBatis-Plus Mapper
+        ├── redis/                缓存 / 分布式锁 / 延时队列 / 限流
+        ├── task/                 定时任务
+        ├── config/               配置
+        ├── interceptor/          JWT 鉴权
+        └── exception/            全局异常处理
 ```
 
 依赖方向：`sr-server → sr-pojo → sr-common`，**单向，禁止反向**。
@@ -127,13 +127,13 @@ export JAVA_HOME=/path/to/jdk-17
 set JAVA_HOME=D:\path\to\jdk-17
 ```
 
-⚠️ 必须是 **JDK 17**。项目三处锁定了 17（`java.version`、IDEA 的 Project SDK、Language level），
+必须是 **JDK 17**。项目三处锁定了 17（`java.version`、IDEA 的 Project SDK、Language level），
 用 21 编译会报「无效的目标发行版: 17」。
 
 ## 开发进度
 
 - [x] **M1 骨架跑通** —— 三模块 Maven 工程、统一返回体、全局异常、Redis 配置、环境分离
-- [ ] **M2 核心闭环** —— 表设计 ✅ / 登录注册 / 自习室与座位管理 / 查空座 / 预约下单 / 取消 / 签到
+- [ ] **M2 核心闭环** —— 表设计 / 登录注册 / 自习室与座位管理 / 查空座 / 预约下单 / 取消 / 签到
 - [ ] **M3 技术亮点** —— 分布式锁、Redis 延时队列超时释放、缓存与一致性、限流、排行榜
 - [ ] **M4 完整与上线** —— RBAC 权限、统计报表、单元测试、Docker 部署上线
 
