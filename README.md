@@ -46,6 +46,10 @@
 
 ```
 campus-seat-reservation/           父工程：统一版本 + 模块聚合（packaging=pom）
+├── docs/
+│   └── M2-acceptance.md           M2 核心闭环验收记录（含并发实测数据）
+├── postman/
+│   └── CampusBook.postman_collection.json  接口集合，导入后可跑通完整闭环
 ├── sql/
 │   ├── 01_init.sql                建库
 │   ├── 02_schema.sql              建表（设计说明写在表定义旁边）

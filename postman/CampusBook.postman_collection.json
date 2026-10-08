@@ -1,0 +1,328 @@
+{
+  "info": {
+    "_postman_id": "b7c3f1a2-4d5e-4f60-9a1b-2c3d4e5f6071",
+    "name": "CampusBook 座位预约 API",
+    "description": "高校自习室座位预约平台的接口集合。\n\n按目录顺序执行即可跑通完整闭环：\n  01 准备       注册 -> 登录（自动保存 token）\n  02 管理端     建自习室 -> 批量生成座位\n  03 预约闭环   查空座 -> 下单 -> 我的预约 -> 签到 -> 取消 -> 再查空座\n\n登录成功后 token 会自动写入集合变量，后续请求由集合级鉴权自动携带。\nroomId / seatId / reservationId 同样在脚本里自动串联，不需要手工复制。\n\n注意两点：\n1. 雪花 ID 是 19 位，超过 JavaScript 安全整数范围，一律以字符串传递。集合里的请求体已经是这个写法，改成数字就会 404。\n2. 签到有窗口限制（时段开始前 15 分钟到开始后 20 分钟）。用未来日期下的单签不了到，属于预期行为。",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      { "key": "value", "value": "{{token}}", "type": "string" },
+      { "key": "key", "value": "Authorization", "type": "string" },
+      { "key": "in", "value": "header", "type": "string" }
+    ]
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// 预约日期固定取「今天 +2 天」，避免集合写死后过期。",
+          "// 不再往前挪的原因是：下单接口会拒绝过去日期，",
+          "// 而取消接口又要求「时段开始前」才能取消 —— 未来日期两个都满足。",
+          "const d = new Date(Date.now() + 2 * 24 * 3600 * 1000);",
+          "const p = n => String(n).padStart(2, '0');",
+          "pm.collectionVariables.set('date',",
+          "  d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()));"
+        ]
+      }
+    }
+  ],
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080", "type": "string" },
+    { "key": "token", "value": "", "type": "string" },
+    { "key": "roomId", "value": "", "type": "string" },
+    { "key": "seatId", "value": "", "type": "string" },
+    { "key": "reservationId", "value": "", "type": "string" },
+    { "key": "date", "value": "", "type": "string" },
+    { "key": "slotId", "value": "2", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "01 准备",
+      "item": [
+        {
+          "name": "健康检查",
+          "auth": { "type": "noauth" },
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/health", "host": ["{{baseUrl}}"], "path": ["health"] },
+            "description": "不需要鉴权。用于确认服务已启动，也用于部署后的探活。"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('服务可用', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "注册",
+          "auth": { "type": "noauth" },
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"stu_2026001\",\n  \"password\": \"abc123456\",\n  \"name\": \"张三\",\n  \"phone\": \"13800000000\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/user/register", "host": ["{{baseUrl}}"], "path": ["user", "register"] },
+            "description": "用户名重复会返回 1007。重复执行本请求不影响后续步骤。"
+          }
+        },
+        {
+          "name": "登录（自动保存 token）",
+          "auth": { "type": "noauth" },
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"stu_2026001\",\n  \"password\": \"abc123456\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/user/login", "host": ["{{baseUrl}}"], "path": ["user", "login"] },
+            "description": "登录失败统一返回 1008，不区分「用户不存在」和「密码错误」——避免账号枚举。"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.code === 200 && res.data) {",
+                  "    // token 交给集合变量，后续请求由集合级鉴权自动带上",
+                  "    pm.collectionVariables.set('token', res.data.token);",
+                  "    console.log('已保存 token =', res.data.token.slice(0, 24) + '...');",
+                  "} else {",
+                  "    console.error('登录失败:', res.msg);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "02 管理端：自习室与座位",
+      "item": [
+        {
+          "name": "新增自习室",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"A栋101自习室\",\n  \"location\": \"教学楼A区一层\",\n  \"capacity\": 40,\n  \"status\": 1\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/study-room", "host": ["{{baseUrl}}"], "path": ["study-room"] },
+            "description": "capacity 只是规划上限，实际座位数以 seat 表为准。同一名称重复新增会被 uk_name_deleted 拦下。"
+          }
+        },
+        {
+          "name": "自习室列表（自动取 roomId）",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/study-room/list", "host": ["{{baseUrl}}"], "path": ["study-room", "list"] }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const rooms = pm.response.json().data || [];",
+                  "const target = rooms.find(r => r.name === 'A栋101自习室') || rooms[0];",
+                  "if (target) {",
+                  "    // 必须转成字符串：19 位雪花 ID 超出 JS 安全整数范围，用数字会丢精度",
+                  "    pm.collectionVariables.set('roomId', String(target.id));",
+                  "    console.log('已保存 roomId =', target.id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "批量生成座位",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"studyRoomId\": \"{{roomId}}\",\n  \"rowCount\": 5,\n  \"colCount\": 8\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/seat/batch-generate", "host": ["{{baseUrl}}"], "path": ["seat", "batch-generate"] },
+            "description": "行号用字母拼（A~Z），列号最多 99。总数超过自习室 capacity 会返回 1010；重复生成同一批编号会返回 1011。"
+          }
+        },
+        {
+          "name": "座位分页（验证分页插件已注册）",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/seat/page?pageNum=1&pageSize=5",
+              "host": ["{{baseUrl}}"],
+              "path": ["seat", "page"],
+              "query": [
+                { "key": "pageNum", "value": "1" },
+                { "key": "pageSize", "value": "5" }
+              ]
+            },
+            "description": "total 必须大于 0。如果 total 恒为 0 而 records 有数据，说明 MyBatis-Plus 的分页插件没注册——它是静默失效的，不报错。"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const d = pm.response.json().data;",
+                  "pm.test('分页 total 不为 0（插件已生效）', () => pm.expect(d.total).to.be.above(0));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "03 预约闭环",
+      "item": [
+        {
+          "name": "查空座（自动取 seatId）",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/reservation/available?roomId={{roomId}}&date={{date}}&slotId={{slotId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["reservation", "available"],
+              "query": [
+                { "key": "roomId", "value": "{{roomId}}" },
+                { "key": "date", "value": "{{date}}" },
+                { "key": "slotId", "value": "{{slotId}}" }
+              ]
+            },
+            "description": "LEFT JOIN reservation，按「日期 + 时段」排除已被占用的座位。"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const list = pm.response.json().data || [];",
+                  "pm.test('有空座', () => pm.expect(list.length).to.be.above(0));",
+                  "if (list.length) {",
+                  "    pm.collectionVariables.set('seatId', String(list[0].id));",
+                  "    console.log('可选座位数 =', list.length, ' 已保存 seatId =', list[0].id);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "预约下单（自动保存 reservationId）",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"seatId\": \"{{seatId}}\",\n  \"reserveDate\": \"{{date}}\",\n  \"slotId\": \"{{slotId}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/reservation", "host": ["{{baseUrl}}"], "path": ["reservation"] },
+            "description": "请求体里没有 userId——下单人只从 token 取。\n返回 data 就是新预约单的 ID，脚本会自动存起来供签到/取消使用。\n座位被抢会返回 1001；同一人同一时段已有有效预约返回的也是 1001。"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "if (res.code === 200 && res.data != null) {",
+                  "    pm.collectionVariables.set('reservationId', String(res.data));",
+                  "    console.log('已保存 reservationId =', res.data);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "我的预约列表",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/reservation/my", "host": ["{{baseUrl}}"], "path": ["reservation", "my"] },
+            "description": "只返回当前登录用户的预约（userId 取自 token，不接受前端传参）。按预约日期倒序。"
+          }
+        },
+        {
+          "name": "签到",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reservationId\": \"{{reservationId}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/reservation/checkin", "host": ["{{baseUrl}}"], "path": ["reservation", "checkin"] },
+            "description": "窗口：时段开始前 15 分钟 到 deadline（时段开始 + 宽限期）。\n不在窗口内返回 1014，这是预期行为，不是 bug。\n用「今天」的日期预约并把时段起始时间调到当前附近，才能验通这个接口。\n签到后 status = 2，座位仍然保持占用（人还在座位上）。"
+          }
+        },
+        {
+          "name": "取消预约",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reservationId\": \"{{reservationId}}\"\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": { "raw": "{{baseUrl}}/reservation/cancel", "host": ["{{baseUrl}}"], "path": ["reservation", "cancel"] },
+            "description": "只有本人能取消（1002 不存在 / 1012 无权 / 1003 状态非法 / 1013 时段已开始）。\n取消会把 occupy_flag 置为 NULL，座位立刻可以被别人重新预约。\n已签到（status=2）的单子不能取消，返回 1003。"
+          }
+        },
+        {
+          "name": "再查空座（座位应已释放）",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/reservation/available?roomId={{roomId}}&date={{date}}&slotId={{slotId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["reservation", "available"],
+              "query": [
+                { "key": "roomId", "value": "{{roomId}}" },
+                { "key": "date", "value": "{{date}}" },
+                { "key": "slotId", "value": "{{slotId}}" }
+              ]
+            },
+            "description": "取消之后跑这一步，刚才那个座位应该重新出现在列表里。\n这一步验证的是 occupy_flag = NULL 这条链路是通的——它断了，M3 的延时队列自动释放会跟着一起坏。"
+          }
+        }
+      ]
+    }
+  ]
+}
