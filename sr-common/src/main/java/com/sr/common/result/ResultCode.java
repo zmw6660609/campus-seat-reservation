@@ -20,7 +20,10 @@ public enum ResultCode {
     USERNAME_OR_PASSWORD_ERROR(1008, "用户名或密码错误"),
     USER_DISABLED(1009, "账号已被禁用"),
     ROOM_CAPACITY_EXCEEDED(1010, "超出该自习室的容量上限"),
-    SEAT_NO_DUPLICATED(1011, "座位编号重复，该自习室可能已生成过座位");
+    SEAT_NO_DUPLICATED(1011, "座位编号重复，该自习室可能已生成过座位"),
+    NO_PERMISSION_OPERATE_RESERVATION(1012, "无权操作该预约单"),
+    RESERVATION_TIME_CANCEL_FORBIDDEN(1013,"时段已开始，无法手动取消"),
+    RESERVATION_SIGN_TIME_ILLEGAL(1014, "不在签到时间窗口内");
 
     private final Integer code;
     private final String msg;

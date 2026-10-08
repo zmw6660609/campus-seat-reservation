@@ -1,6 +1,7 @@
 package com.sr.pojo.entity;
 
 import com.baomidou.mybatisplus.annotation.FieldFill;
+import com.baomidou.mybatisplus.annotation.FieldStrategy;
 import com.baomidou.mybatisplus.annotation.IdType;
 import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
@@ -33,7 +34,13 @@ public class Reservation {
      * 占用标记：1=占用中，NULL=已释放。
      * 唯一索引对 NULL 不生效，所以释放时置 null，不能置 0
      * （置 0 的话，"同一座位同一时段只能有一条已取消记录"，第二次取消会写不进去）。
+     *
+     * <p>updateStrategy = ALWAYS 是必须的：MyBatis-Plus 默认的更新策略是 NOT_NULL，
+     * null 字段会被静默跳过。而"释放占用"做的恰恰就是把这一列写成 NULL ——
+     * 少了这个注解，取消会返回成功、status 也变了，但 occupy_flag 一直停在 1，
+     * 座位永远释放不出来。
      */
+    @TableField(updateStrategy = FieldStrategy.ALWAYS)
     private Integer occupyFlag;
 
     private LocalDateTime checkinTime;
@@ -47,4 +54,6 @@ public class Reservation {
 
     @TableField(fill = FieldFill.INSERT_UPDATE)
     private LocalDateTime updateTime;
+
+
 }

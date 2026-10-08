@@ -1,20 +1,26 @@
 package com.sr.service.impl;
 
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sr.common.exception.BizException;
+import com.sr.common.result.ReservationStatus;
 import com.sr.common.result.ResultCode;
 import com.sr.context.UserContext;
 import com.sr.mapper.ReservationMapper;
 import com.sr.mapper.SeatMapper;
 import com.sr.mapper.SysUserMapper;
 import com.sr.mapper.TimeSlotMapper;
+import com.sr.pojo.dto.CancelReservationDTO;
+import com.sr.pojo.dto.CheckinReservationDTO;
 import com.sr.pojo.dto.CreateReservationDTO;
 import com.sr.pojo.entity.Reservation;
 import com.sr.pojo.entity.Seat;
 import com.sr.pojo.entity.SysUser;
 import com.sr.pojo.entity.TimeSlot;
+import com.sr.pojo.vo.ReservationVO;
 import com.sr.service.ReservationService;
 import jakarta.annotation.Resource;
+import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
@@ -24,6 +30,7 @@ import org.springframework.transaction.interceptor.TransactionAspectSupport;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.stream.Collectors;
 
 @Service
 public class ReservationServiceImpl implements ReservationService {
@@ -56,10 +63,12 @@ public class ReservationServiceImpl implements ReservationService {
      * <p>注意这里的顺序是有意的：先做「便宜且确定」的校验（时段、日期、座位、信用分），
      * 再做一次数据库查询（"这个人该时段已有几个座位"），最后才写库。
      * 而真正兜底的防线不在这个方法里，在 reservation 表那个唯一索引上。
+     *
+     * <p>返回新预约单的 ID：前端拿到它才能去签到或取消。
      */
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public void createReservation(CreateReservationDTO dto) {
+    public Long createReservation(CreateReservationDTO dto) {
 
         // 下单人是谁，只能从 token 里取。DTO 里没有 userId，也不该有。
         Long userId = UserContext.get();
@@ -111,6 +120,7 @@ public class ReservationServiceImpl implements ReservationService {
 
         // ⑥ deadline = 预约日期 + 时段开始时间 + 宽限期
         LocalDateTime slotStart = LocalDateTime.of(reserveDate, timeSlot.getStartTime());
+        LocalDateTime slotEnd = LocalDateTime.of(reserveDate, timeSlot.getEndTime());
         LocalDateTime deadline = slotStart.plusMinutes(graceMinutes);
 
         Reservation reservation = new Reservation();
@@ -119,7 +129,7 @@ public class ReservationServiceImpl implements ReservationService {
         reservation.setRoomId(seat.getRoomId());
         reservation.setReserveDate(reserveDate);
         reservation.setSlotId(slotId);
-        reservation.setStatus(1);
+        reservation.setStatus(ReservationStatus.RESERVED.getCode());
         reservation.setOccupyFlag(1);
         reservation.setDeadline(deadline);
 
@@ -137,5 +147,94 @@ public class ReservationServiceImpl implements ReservationService {
             TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();
             throw new BizException(ResultCode.SEAT_ALREADY_RESERVED);
         }
+
+        return reservation.getId();
     }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void cancelReservation(CancelReservationDTO dto) {
+        Long loginUserId = UserContext.get();
+        Long reservationId = dto.getReservationId();
+
+        Reservation reservation = reservationMapper.selectById(reservationId);
+        if (reservation == null) {
+            throw new BizException(ResultCode.RESERVATION_NOT_FOUND);
+        }
+
+        if (!reservation.getUserId().equals(loginUserId)) {
+            throw new BizException(ResultCode.NO_PERMISSION_OPERATE_RESERVATION);
+        }
+
+        if (!ReservationStatus.RESERVED.getCode().equals(reservation.getStatus())) {
+            throw new BizException(ResultCode.RESERVATION_STATUS_ILLEGAL);
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        TimeSlot slot = timeSlotMapper.selectById(reservation.getSlotId());
+        LocalDateTime slotStart = LocalDateTime.of(reservation.getReserveDate(), slot.getStartTime());
+        if (!now.isBefore(slotStart)) {
+            throw new BizException(ResultCode.RESERVATION_TIME_CANCEL_FORBIDDEN);
+        }
+
+        reservation.setStatus(ReservationStatus.CANCELLED.getCode());
+        reservation.setCancelTime(now);
+        reservation.setOccupyFlag(null);
+
+        reservationMapper.updateById(reservation);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void checkinReservation(CheckinReservationDTO dto) {
+        Long loginUserId = UserContext.get();
+
+        Reservation reservation = reservationMapper.selectById(dto.getReservationId());
+        if (reservation == null) {
+            throw new BizException(ResultCode.RESERVATION_NOT_FOUND);
+        }
+
+        // 只能给自己的预约签到。
+        // 少了这一段，任何登录用户拿着别人的 reservationId 就能替别人签到 ——
+        // 和取消是同一类越权，两个方法的校验必须对齐。
+        if (!reservation.getUserId().equals(loginUserId)) {
+            throw new BizException(ResultCode.NO_PERMISSION_OPERATE_RESERVATION);
+        }
+
+        if (!ReservationStatus.RESERVED.getCode().equals(reservation.getStatus())) {
+            throw new BizException(ResultCode.RESERVATION_STATUS_ILLEGAL);
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        TimeSlot slot = timeSlotMapper.selectById(reservation.getSlotId());
+        LocalDateTime slotStart = LocalDateTime.of(reservation.getReserveDate(), slot.getStartTime());
+        // 可签到窗口：[时段开始前 15 分钟, deadline]
+        LocalDateTime canSignBegin = slotStart.minusMinutes(15);
+        if (now.isBefore(canSignBegin) || now.isAfter(reservation.getDeadline())) {
+            throw new BizException(ResultCode.RESERVATION_SIGN_TIME_ILLEGAL);
+        }
+
+        reservation.setStatus(ReservationStatus.CHECK_IN.getCode());
+        reservation.setCheckinTime(now);
+
+        reservationMapper.updateById(reservation);
+    }
+
+    @Override
+    public List<ReservationVO> getMyReservationList() {
+        Long userId = UserContext.get();
+        LambdaQueryWrapper<Reservation> wrapper = Wrappers.lambdaQuery();
+        wrapper.eq(Reservation::getUserId, userId)
+                .orderByDesc(Reservation::getReserveDate);
+
+        List<Reservation> reservationList = reservationMapper.selectList(wrapper);
+
+        return reservationList.stream().map(res -> {
+            ReservationVO vo = new ReservationVO();
+            BeanUtils.copyProperties(res, vo);
+            return vo;
+        }).collect(Collectors.toList());
+    }
+
+
 }
