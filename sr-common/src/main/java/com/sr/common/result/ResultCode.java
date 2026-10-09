@@ -23,7 +23,9 @@ public enum ResultCode {
     SEAT_NO_DUPLICATED(1011, "座位编号重复，该自习室可能已生成过座位"),
     NO_PERMISSION_OPERATE_RESERVATION(1012, "无权操作该预约单"),
     RESERVATION_TIME_CANCEL_FORBIDDEN(1013,"时段已开始，无法手动取消"),
-    RESERVATION_SIGN_TIME_ILLEGAL(1014, "不在签到时间窗口内");
+    RESERVATION_SIGN_TIME_ILLEGAL(1014, "不在签到时间窗口内"),
+    USER_SLOT_ALREADY_RESERVED(1015, "你在该时段已有预约，不能重复预约"),
+    CONCURRENT_CONFLICT(1016, "操作冲突，请重试");
 
     private final Integer code;
     private final String msg;

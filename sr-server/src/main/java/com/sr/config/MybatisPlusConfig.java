@@ -2,6 +2,7 @@ package com.sr.config;
 
 import com.baomidou.mybatisplus.annotation.DbType;
 import com.baomidou.mybatisplus.extension.plugins.MybatisPlusInterceptor;
+import com.baomidou.mybatisplus.extension.plugins.inner.OptimisticLockerInnerInterceptor;
 import com.baomidou.mybatisplus.extension.plugins.inner.PaginationInnerInterceptor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -27,6 +28,11 @@ public class MybatisPlusConfig {
         pagination.setMaxLimit(100L);
 
         interceptor.addInnerInterceptor(pagination);
+
+        // 乐观锁插件：让带 @Version 的实体在更新时自动带上版本条件。
+        // 注意同一个插件只能注册一次 —— 注册两遍会把分页的 LIMIT 拼两次，
+        // 变成 "LIMIT ? LIMIT ?" 这种语法错误。
+        interceptor.addInnerInterceptor(new OptimisticLockerInnerInterceptor());
         return interceptor;
     }
 }

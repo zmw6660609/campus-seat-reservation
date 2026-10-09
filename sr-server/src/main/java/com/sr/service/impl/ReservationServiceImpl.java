@@ -21,6 +21,7 @@ import com.sr.pojo.vo.ReservationVO;
 import com.sr.service.ReservationService;
 import jakarta.annotation.Resource;
 import org.springframework.beans.BeanUtils;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
@@ -34,12 +35,11 @@ import java.util.stream.Collectors;
 
 @Service
 public class ReservationServiceImpl implements ReservationService {
-
     /** 用户信用分低于这个值就不让预约 */
     private static final int MIN_CREDIT_SCORE = 100;
     /** 每人在同一时段最多占几个座 */
     private static final int MAX_SEAT_PER_SLOT = 1;
-
+    private static final int MAX_RETRY = 3;
     @Resource
     private ReservationMapper reservationMapper;
     @Resource
@@ -69,7 +69,6 @@ public class ReservationServiceImpl implements ReservationService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public Long createReservation(CreateReservationDTO dto) {
-
         // 下单人是谁，只能从 token 里取。DTO 里没有 userId，也不该有。
         Long userId = UserContext.get();
         Long seatId = dto.getSeatId();
@@ -103,19 +102,37 @@ public class ReservationServiceImpl implements ReservationService {
             throw new BizException(ResultCode.CREDIT_NOT_ENOUGH);
         }
 
-        // ⑤ 同一个人在同一时段最多占 MAX_SEAT_PER_SLOT 个座
-        //    ★ 必须带上 occupy_flag = 1：只统计「占用中」的。
-        //    漏了这个条件，用户取消过一次之后就再也约不了这个时段 ——
-        //    他会被自己那条已经取消的记录挡住。（和查空座是同一个知识点）
-        long mySeatCount = reservationMapper.selectCount(
-                Wrappers.lambdaQuery(Reservation.class)
-                        .eq(Reservation::getUserId, userId)
-                        .eq(Reservation::getReserveDate, reserveDate)
-                        .eq(Reservation::getSlotId, slotId)
-                        .eq(Reservation::getOccupyFlag, 1)
-        );
-        if (mySeatCount >= MAX_SEAT_PER_SLOT) {
-            throw new BizException(ResultCode.SEAT_ALREADY_RESERVED);
+
+        int retry = 0;
+        while (true) {
+            //① 每次循环都重新查询最新数据库状态
+            long mySeatCount = reservationMapper.selectCount(
+                    Wrappers.lambdaQuery(Reservation.class)
+                            .eq(Reservation::getUserId, userId)
+                            .eq(Reservation::getReserveDate, reserveDate)
+                            .eq(Reservation::getSlotId, slotId)
+                            .eq(Reservation::getOccupyFlag, 1));
+            if (mySeatCount >= MAX_SEAT_PER_SLOT) {
+                throw new BizException(ResultCode.USER_SLOT_ALREADY_RESERVED);
+            }
+
+            //② 查询当前用户最新version
+            SysUser latest = sysUserMapper.selectById(userId);
+            //CAS：version必须等于刚才查到的版本，才执行version+1
+            int rows = sysUserMapper.update(null, Wrappers.lambdaUpdate(SysUser.class)
+                    .setSql("version = version + 1")
+                    .eq(SysUser::getId, userId)
+                    .eq(SysUser::getVersion, latest.getVersion()));
+
+            if (rows > 0) {
+                //✅ CAS更新成功：说明循环期间没有其他请求修改该用户，mySeatCount计数可信，跳出循环执行insert
+                break;
+            }
+            //rows=0：版本不匹配，被其他并发请求抢占
+            if (++retry >= MAX_RETRY) {
+                throw new BizException(ResultCode.CONCURRENT_CONFLICT);
+            }
+            //continue循环，重新查计数、重新拿version重试
         }
 
         // ⑥ deadline = 预约日期 + 时段开始时间 + 宽限期
@@ -145,6 +162,11 @@ public class ReservationServiceImpl implements ReservationService {
             // 但显式标一次 rollbackOnly 更保险 —— 万一以后有人把这行 throw 去掉，
             // 事务就不会静默地半提交。
             TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();
+            String msg = e.getMessage() == null ? "" : e.getMessage();
+            // 根据异常信息里面的索引名区分冲突来源
+            if (msg.contains("uk_user_date_slot")) {
+                throw new BizException(ResultCode.USER_SLOT_ALREADY_RESERVED);
+            }
             throw new BizException(ResultCode.SEAT_ALREADY_RESERVED);
         }
 

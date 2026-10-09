@@ -47,6 +47,7 @@ CREATE TABLE `sys_user` (
     `status`       TINYINT         NOT NULL DEFAULT 1     COMMENT '状态：1=正常 0=禁用',
     `create_time`  DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
     `update_time`  DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    `version`      INT             NOT NULL DEFAULT 0    COMMENT '乐观锁版本号',
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_username` (`username`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT ='用户';
@@ -170,7 +171,8 @@ CREATE TABLE `reservation` (
 
     -- ★★★ 防超卖的第一道、也是最可靠的一道防线 ★★★
     UNIQUE KEY `uk_seat_date_slot` (`seat_id`, `reserve_date`, `slot_id`, `occupy_flag`),
-
+    -- 每人每时段最多1个座：数据库兜底，应用层漏校验也拦得住
+    UNIQUE KEY `uk_user_date_slot` (`user_id`, `reserve_date`, `slot_id`, `occupy_flag`),
     KEY `idx_user_date` (`user_id`, `reserve_date`),
     KEY `idx_room_date_slot` (`room_id`, `reserve_date`, `slot_id`),
     KEY `idx_status_deadline` (`status`, `deadline`)
