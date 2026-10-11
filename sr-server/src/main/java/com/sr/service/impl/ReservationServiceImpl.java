@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.sr.common.exception.BizException;
 import com.sr.common.result.ReservationStatus;
 import com.sr.common.result.ResultCode;
+import com.sr.constant.RedisKeyConstant;
 import com.sr.context.UserContext;
 import com.sr.mapper.ReservationMapper;
 import com.sr.mapper.SeatMapper;
@@ -19,14 +20,16 @@ import com.sr.pojo.entity.SysUser;
 import com.sr.pojo.entity.TimeSlot;
 import com.sr.pojo.vo.ReservationVO;
 import com.sr.service.ReservationService;
+import com.sr.util.RedisLockUtil;
 import jakarta.annotation.Resource;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.interceptor.TransactionAspectSupport;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -48,6 +51,10 @@ public class ReservationServiceImpl implements ReservationService {
     private SysUserMapper sysUserMapper;
     @Resource
     private TimeSlotMapper timeSlotMapper;
+    @Resource
+    private RedisLockUtil redisLockUtil;
+    @Resource
+    private TransactionTemplate transactionTemplate;
 
     @Value("${sr.reservation.checkin-grace-minutes}")
     private Integer graceMinutes;
@@ -60,20 +67,25 @@ public class ReservationServiceImpl implements ReservationService {
     /**
      * 预约下单。
      *
-     * <p>注意这里的顺序是有意的：先做「便宜且确定」的校验（时段、日期、座位、信用分），
-     * 再做一次数据库查询（"这个人该时段已有几个座位"），最后才写库。
-     * 而真正兜底的防线不在这个方法里，在 reservation 表那个唯一索引上。
+     * <p>顺序是有意的：先做「便宜且确定」的校验（时段、日期、座位、信用分），
+     * 再进临界区查「这个人该时段已有几个座位」，最后写库。
+     * 真正兜底的防线不在这个方法里，在 reservation 表那两个唯一索引上。
      *
      * <p>返回新预约单的 ID：前端拿到它才能去签到或取消。
+     *
+     * <p>★ 这里刻意不用 @Transactional，而是用 TransactionTemplate 手动控制事务边界。
+     * 因为分布式锁必须包住整个事务：若把事务交给 @Transactional 管，提交会发生在
+     * 方法返回之后，而 unlock 在方法体内 —— 两者之间就存在「锁已释放、数据尚未提交」
+     * 的窗口，后一个请求拿到锁时读到的还是旧数据。
      */
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public Long createReservation(CreateReservationDTO dto) {
         // 下单人是谁，只能从 token 里取。DTO 里没有 userId，也不该有。
         Long userId = UserContext.get();
         Long seatId = dto.getSeatId();
         Long slotId = dto.getSlotId();
         LocalDate reserveDate = dto.getReserveDate();
+        String lockKey = RedisKeyConstant.LOCK_RESERVE + userId + ":" + reserveDate + ":" + slotId;
 
         // ① 时段必须存在且启用
         //    ★ 查的是 slotId，不是 userId —— 这两个都是 Long，编译器不会帮你发现传错了
@@ -102,7 +114,24 @@ public class ReservationServiceImpl implements ReservationService {
             throw new BizException(ResultCode.CREDIT_NOT_ENOUGH);
         }
 
+        // ①~④ 都是「读别的表做校验」，不涉及会冲突的数据，所以放在锁外做，尽量缩短持锁时间。
+        // 下面才是真正的临界区：锁在外面，事务在里面 —— 这样 unlock 必然发生在事务提交之后。
+        String lockValue = redisLockUtil.lock(lockKey, 10, 3000);
+        try {
+            return transactionTemplate.execute(status ->
+                    doCreateReservation(status, userId, seatId, slotId, reserveDate, timeSlot, seat));
+        } finally {
+            redisLockUtil.unlock(lockKey, lockValue);
+        }
+    }
 
+    /**
+     * 真正的下单逻辑：查计数 -> 判额度 -> CAS 占位 -> 写单。
+     *
+     * <p>事务边界交给调用方用 TransactionTemplate 控制，好让分布式锁能包住整个事务。
+     */
+    private Long doCreateReservation(TransactionStatus status, Long userId, Long seatId, Long slotId,
+                                     LocalDate reserveDate, TimeSlot timeSlot, Seat seat) {
         int retry = 0;
         while (true) {
             //① 每次循环都重新查询最新数据库状态
@@ -137,7 +166,6 @@ public class ReservationServiceImpl implements ReservationService {
 
         // ⑥ deadline = 预约日期 + 时段开始时间 + 宽限期
         LocalDateTime slotStart = LocalDateTime.of(reserveDate, timeSlot.getStartTime());
-        LocalDateTime slotEnd = LocalDateTime.of(reserveDate, timeSlot.getEndTime());
         LocalDateTime deadline = slotStart.plusMinutes(graceMinutes);
 
         Reservation reservation = new Reservation();
@@ -161,7 +189,11 @@ public class ReservationServiceImpl implements ReservationService {
             // 虽然下面抛的 BizException 是 RuntimeException、本来也会触发回滚，
             // 但显式标一次 rollbackOnly 更保险 —— 万一以后有人把这行 throw 去掉，
             // 事务就不会静默地半提交。
-            TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();
+            // 用 TransactionTemplate 传进来的 status 标记回滚。
+            // ★ 不能用 TransactionAspectSupport.currentTransactionStatus() ——
+            //   那是给 @Transactional 的 AOP 切面用的，TransactionTemplate 不走那套机制，
+            //   在模板里调它会抛 NoTransactionException。
+            status.setRollbackOnly();
             String msg = e.getMessage() == null ? "" : e.getMessage();
             // 根据异常信息里面的索引名区分冲突来源
             if (msg.contains("uk_user_date_slot")) {
