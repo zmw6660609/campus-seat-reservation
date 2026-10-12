@@ -32,5 +32,7 @@ public interface ReservationService {
     List<Object> pollTimeoutReservations(int limit);
     void markViolation(Long reservationId);
 
+    List<Long> getHotSeatTopN(Long roomId, int topN);
+
 
 }

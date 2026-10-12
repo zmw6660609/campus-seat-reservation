@@ -6,4 +6,6 @@ public class RedisKeyConstant {
     public static final String DELAY_CHECKIN = "delay:checkin";
     public static final String CACHE_AVAILABLE = "cache:available:";
     public static final String LOCK_CACHE_REBUILD = "lock:cache_rebuild:";
+
+    public static final String RANK_HOT_SEAT = "rank:hot:seat:";
 }

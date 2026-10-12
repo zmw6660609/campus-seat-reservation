@@ -41,7 +41,9 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadLocalRandom;
@@ -300,6 +302,8 @@ public class ReservationServiceImpl implements ReservationService {
                 redisTemplate.opsForZSet().add(RedisKeyConstant.DELAY_CHECKIN,
                         reservation.getId(), scoreMs);
                 evictAvailableCache(reservation.getRoomId(), reserveDate, slotId);
+                String rankKey = RedisKeyConstant.RANK_HOT_SEAT + reservation.getRoomId();
+                redisTemplate.opsForZSet().incrementScore(rankKey, reservation.getSeatId(), 1);
             }
         });
 
@@ -428,6 +432,18 @@ public class ReservationServiceImpl implements ReservationService {
                 evictAvailableCache(reservation.getRoomId(), reservation.getReserveDate(), reservation.getSlotId());
             }
         });
+    }
+
+    @Override
+    public List<Long> getHotSeatTopN(Long roomId, int topN) {
+        String rankKey = RedisKeyConstant.RANK_HOT_SEAT + roomId;
+        Set<Object> objSet = redisTemplate.opsForZSet().reverseRange(rankKey, 0, topN - 1);
+        if (objSet == null || objSet.isEmpty()) {
+            return Collections.emptyList();
+        }
+        return objSet.stream()
+                .map(obj -> Long.parseLong(obj.toString()))
+                .collect(Collectors.toList());
     }
 
     private void evictAvailableCache(Long roomId, LocalDate reserveDate, Long slotId)
