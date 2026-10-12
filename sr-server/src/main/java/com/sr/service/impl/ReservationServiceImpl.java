@@ -23,17 +23,24 @@ import com.sr.service.ReservationService;
 import com.sr.util.RedisLockUtil;
 import com.sr.util.RedissonLockUtil;
 import jakarta.annotation.Resource;
+import org.redisson.api.RLock;
+import org.redisson.api.RedissonClient;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -61,6 +68,15 @@ public class ReservationServiceImpl implements ReservationService {
 
     @Value("${sr.reservation.checkin-grace-minutes}")
     private Integer graceMinutes;
+    @Resource
+    private RedisTemplate<String, Object> redisTemplate;
+
+    @Resource
+    private RedissonClient redissonClient;
+
+    private static final String POLL_DELAY_LUA =
+            "local expired = redis.call('ZRANGEBYSCORE', KEYS[1], 0, ARGV[1], 'LIMIT', 0, ARGV[2]) " +
+                    "if #expired > 0 then redis.call('ZREM', KEYS[1], unpack(expired)) end return expired";
 
     @Override
     public List<Seat> getAvailableSeats(Long roomId, LocalDate date, Long slotId) {
@@ -224,6 +240,15 @@ public class ReservationServiceImpl implements ReservationService {
             throw new BizException(ResultCode.SEAT_ALREADY_RESERVED);
         }
 
+        long scoreMs = deadline.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization(){
+            @Override
+            public void afterCommit() {
+                // 事务真正提交完成，再写入ZSet延时队列
+                redisTemplate.opsForZSet().add(RedisKeyConstant.DELAY_CHECKIN,
+                        reservation.getId(), scoreMs);
+            }
+        });
         return reservation.getId();
     }
 
@@ -258,6 +283,7 @@ public class ReservationServiceImpl implements ReservationService {
         reservation.setOccupyFlag(null);
 
         reservationMapper.updateById(reservation);
+        redisTemplate.opsForZSet().remove(RedisKeyConstant.DELAY_CHECKIN, reservation.getId());
     }
 
     @Override
@@ -294,6 +320,7 @@ public class ReservationServiceImpl implements ReservationService {
         reservation.setCheckinTime(now);
 
         reservationMapper.updateById(reservation);
+        redisTemplate.opsForZSet().remove(RedisKeyConstant.DELAY_CHECKIN, reservation.getId());
     }
 
     @Override
@@ -311,5 +338,26 @@ public class ReservationServiceImpl implements ReservationService {
             return vo;
         }).collect(Collectors.toList());
     }
+
+    @Override
+    public List<Object> pollTimeoutReservations(int limit) {
+        DefaultRedisScript<List> script = new DefaultRedisScript<>(POLL_DELAY_LUA, List.class);
+        long nowMs = System.currentTimeMillis();
+        return redisTemplate.execute(script,
+                List.of(RedisKeyConstant.DELAY_CHECKIN),
+                nowMs, limit);
+    }
+
+    @Override
+    @Transactional
+    public void markViolation(Long reservationId) {
+        reservationMapper.update(null, Wrappers.lambdaUpdate(Reservation.class)
+                .set(Reservation::getStatus, ReservationStatus.VIOLATION.getCode())
+                .set(Reservation::getOccupyFlag, null)
+                .eq(Reservation::getId, reservationId)
+                .eq(Reservation::getStatus, ReservationStatus.RESERVED.getCode())
+                .eq(Reservation::getOccupyFlag, 1));
+    }
+
 
 }

@@ -28,4 +28,9 @@ public interface ReservationService {
     void checkinReservation(CheckinReservationDTO dto);
 
     List<ReservationVO> getMyReservationList();
+
+    List<Object> pollTimeoutReservations(int limit);
+    void markViolation(Long reservationId);
+
+
 }
