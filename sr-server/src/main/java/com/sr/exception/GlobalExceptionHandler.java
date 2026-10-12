@@ -7,10 +7,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.validation.BindException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
-
-import java.lang.reflect.Field;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 @Slf4j
 @RestControllerAdvice
@@ -35,6 +35,25 @@ public class GlobalExceptionHandler {
         FieldError fieldError = e.getBindingResult().getFieldError();
         String msg = (fieldError != null) ? fieldError.getDefaultMessage() : ResultCode.PARAM_ERROR.getMsg();
         log.warn("表单参数异常：{}", msg);
+        return Result.error(ResultCode.PARAM_ERROR.getCode(), msg);
+    }
+
+    /**
+     * 参数类型对不上：比如 roomId 传了超过 Long 上限的数字、或者把日期写成 2026/11/01。
+     * 不单独接住的话会被下面的兜底处理器接走，明明是调用方的错却报 500。
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public Result<?> handleTypeMismatch(MethodArgumentTypeMismatchException e) {
+        String msg = "参数 " + e.getName() + " 格式不正确";
+        log.warn("参数类型不匹配：{}", e.getMessage());
+        return Result.error(ResultCode.PARAM_ERROR.getCode(), msg);
+    }
+
+    /** 必填参数没传。同样不该被兜底处理成 500。 */
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public Result<?> handleMissingParam(MissingServletRequestParameterException e) {
+        String msg = "缺少必填参数 " + e.getParameterName();
+        log.warn("缺少参数：{}", e.getMessage());
         return Result.error(ResultCode.PARAM_ERROR.getCode(), msg);
     }
 
