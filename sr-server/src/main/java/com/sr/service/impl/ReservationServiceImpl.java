@@ -42,6 +42,9 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.LockSupport;
 import java.util.stream.Collectors;
 
 @Service
@@ -78,10 +81,55 @@ public class ReservationServiceImpl implements ReservationService {
             "local expired = redis.call('ZRANGEBYSCORE', KEYS[1], 0, ARGV[1], 'LIMIT', 0, ARGV[2]) " +
                     "if #expired > 0 then redis.call('ZREM', KEYS[1], unpack(expired)) end return expired";
 
+//    @Override
+//    public List<Seat> getAvailableSeats(Long roomId, LocalDate date, Long slotId) {
+//        return reservationMapper.selectAvailableSeats(roomId, date, slotId);
+//    }
     @Override
-    public List<Seat> getAvailableSeats(Long roomId, LocalDate date, Long slotId) {
-        return reservationMapper.selectAvailableSeats(roomId, date, slotId);
+    public List<Seat> getAvailableSeats(Long roomId, LocalDate date, Long slotId)
+    {
+        String key=RedisKeyConstant.CACHE_AVAILABLE + roomId + ":"+ date+":"+slotId;
+        Object cached = redisTemplate.opsForValue().get(key);
+        if (cached != null) {
+            return (List<Seat>) cached;
+        }
+
+        String lockKey = RedisKeyConstant.LOCK_CACHE_REBUILD + key;
+        String lockValue = redisLockUtil.tryLock(lockKey, 5);
+
+        // 没有拿到锁：休眠50ms，重读一次缓存；读到就直接返回；读不到继续往下回源
+        if (lockValue == null) {
+            LockSupport.parkNanos(50_000_000L);
+            Object againCache = redisTemplate.opsForValue().get(key);
+            if (againCache != null) {
+                return (List<Seat>) againCache;
+            }
+        }
+
+        try {
+            // ③ 回源查数据库
+            List<Seat> seats = reservationMapper.selectAvailableSeats(roomId, date, slotId);
+
+            // ④ 设置TTL
+            // 空集合：短TTL 60s【防缓存穿透】
+            // 正常数据：300~420秒随机过期【防缓存雪崩，随机偏移】
+            int ttl;
+            if (seats.isEmpty()) {
+                ttl = 60;
+            } else {
+                ttl = 300 + ThreadLocalRandom.current().nextInt(120);
+            }
+            redisTemplate.opsForValue().set(key, seats, ttl, TimeUnit.SECONDS);
+
+            return seats;
+        } finally {
+            // 只有自己拿到锁才释放
+            if (lockValue != null) {
+                redisLockUtil.unlock(lockKey, lockValue);
+            }
+        }
     }
+
 
     /**
      * 预约下单。
