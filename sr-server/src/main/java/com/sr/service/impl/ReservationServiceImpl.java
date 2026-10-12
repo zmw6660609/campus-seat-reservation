@@ -21,6 +21,7 @@ import com.sr.pojo.entity.TimeSlot;
 import com.sr.pojo.vo.ReservationVO;
 import com.sr.service.ReservationService;
 import com.sr.util.RedisLockUtil;
+import com.sr.util.RedissonLockUtil;
 import jakarta.annotation.Resource;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -53,6 +54,8 @@ public class ReservationServiceImpl implements ReservationService {
     private TimeSlotMapper timeSlotMapper;
     @Resource
     private RedisLockUtil redisLockUtil;
+    @Resource
+    private RedissonLockUtil redissonLockUtil;
     @Resource
     private TransactionTemplate transactionTemplate;
 
@@ -116,13 +119,32 @@ public class ReservationServiceImpl implements ReservationService {
 
         // ①~④ 都是「读别的表做校验」，不涉及会冲突的数据，所以放在锁外做，尽量缩短持锁时间。
         // 下面才是真正的临界区：锁在外面，事务在里面 —— 这样 unlock 必然发生在事务提交之后。
-        String lockValue = redisLockUtil.lock(lockKey, 10, 3000);
-        try {
-            return transactionTemplate.execute(status ->
-                    doCreateReservation(status, userId, seatId, slotId, reserveDate, timeSlot, seat));
-        } finally {
-            redisLockUtil.unlock(lockKey, lockValue);
-        }
+
+        // ===== 方案 B（当前启用）：Redisson 分布式锁，带看门狗自动续期 =====
+        // 好处是不用自己估过期时间，业务没跑完看门狗会续期，不会出现「锁提前过期」。
+        return redissonLockUtil.executeWithLock(lockKey, 3, () ->
+                // 内层：编程式事务，事务提交完成才退出这个 lambda，随后工具内部 finally 释放锁
+                transactionTemplate.execute(status ->
+                        doCreateReservation(status, userId, seatId, slotId, reserveDate, timeSlot, seat)
+                )
+        );
+
+        // ===== 方案 A（M3-2 手写锁，保留作对比，默认不启用）=====
+        // 与方案 B 逻辑等价：SETNX 加锁 + 过期时间 + UUID 标识 + Lua 脚本释放 + 自旋等待。
+        // 差别在过期时间得自己估：估短了业务还没跑完锁就自己过期了（M3-2 就是拿这点做对比的）。
+        //
+        // ★★ 切换须知：两套锁绝对不能同时打开。
+        //    同一个 lockKey 上，方案 A 用 SETNX 写进去的是 String，
+        //    方案 B 的 Redisson 加锁走的是 Hash 结构，两者共存会直接撞出 WRONGTYPE 错误。
+        //    想回到方案 A：把上面方案 B 那段 return 注释掉，再把下面这段放开。
+        //
+        // String lockValue = redisLockUtil.lock(lockKey, 10, 3000);
+        // try {
+        //     return transactionTemplate.execute(status ->
+        //             doCreateReservation(status, userId, seatId, slotId, reserveDate, timeSlot, seat));
+        // } finally {
+        //     redisLockUtil.unlock(lockKey, lockValue);
+        // }
     }
 
     /**
@@ -289,6 +311,5 @@ public class ReservationServiceImpl implements ReservationService {
             return vo;
         }).collect(Collectors.toList());
     }
-
 
 }
