@@ -42,6 +42,8 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.LockSupport;
@@ -76,6 +78,8 @@ public class ReservationServiceImpl implements ReservationService {
 
     @Resource
     private RedissonClient redissonClient;
+
+    private final ScheduledExecutorService scheduledExecutor = Executors.newSingleThreadScheduledExecutor();
 
     private static final String POLL_DELAY_LUA =
             "local expired = redis.call('ZRANGEBYSCORE', KEYS[1], 0, ARGV[1], 'LIMIT', 0, ARGV[2]) " +
@@ -295,8 +299,11 @@ public class ReservationServiceImpl implements ReservationService {
                 // 事务真正提交完成，再写入ZSet延时队列
                 redisTemplate.opsForZSet().add(RedisKeyConstant.DELAY_CHECKIN,
                         reservation.getId(), scoreMs);
+                evictAvailableCache(reservation.getRoomId(), reserveDate, slotId);
             }
         });
+
+
         return reservation.getId();
     }
 
@@ -332,6 +339,14 @@ public class ReservationServiceImpl implements ReservationService {
 
         reservationMapper.updateById(reservation);
         redisTemplate.opsForZSet().remove(RedisKeyConstant.DELAY_CHECKIN, reservation.getId());
+
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                evictAvailableCache(reservation.getRoomId(), reservation.getReserveDate(), slot.getId());
+            }
+        });
+
     }
 
     @Override
@@ -399,12 +414,29 @@ public class ReservationServiceImpl implements ReservationService {
     @Override
     @Transactional
     public void markViolation(Long reservationId) {
+        Reservation reservation = reservationMapper.selectById(reservationId);
         reservationMapper.update(null, Wrappers.lambdaUpdate(Reservation.class)
                 .set(Reservation::getStatus, ReservationStatus.VIOLATION.getCode())
                 .set(Reservation::getOccupyFlag, null)
                 .eq(Reservation::getId, reservationId)
                 .eq(Reservation::getStatus, ReservationStatus.RESERVED.getCode())
                 .eq(Reservation::getOccupyFlag, 1));
+
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                evictAvailableCache(reservation.getRoomId(), reservation.getReserveDate(), reservation.getSlotId());
+            }
+        });
+    }
+
+    private void evictAvailableCache(Long roomId, LocalDate reserveDate, Long slotId)
+    {
+        String cacheKey = RedisKeyConstant.CACHE_AVAILABLE + roomId + ":" + reserveDate + ":" + slotId;
+        redisTemplate.delete(cacheKey);
+        scheduledExecutor.schedule(() -> {
+            redisTemplate.delete(cacheKey);
+        }, 500, TimeUnit.MILLISECONDS);
     }
 
 
