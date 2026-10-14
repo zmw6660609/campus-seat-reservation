@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "b7c3f1a2-4d5e-4f60-9a1b-2c3d4e5f6071",
     "name": "CampusBook 座位预约 API",
-    "description": "高校自习室座位预约平台的接口集合。\n\n按目录顺序执行即可跑通完整闭环：\n  01 准备       注册 -> 登录（自动保存 token）\n  02 管理端     建自习室 -> 批量生成座位\n  03 预约闭环   查空座 -> 下单 -> 我的预约 -> 签到 -> 取消 -> 再查空座\n\n登录成功后 token 会自动写入集合变量，后续请求由集合级鉴权自动携带。\nroomId / seatId / reservationId 同样在脚本里自动串联，不需要手工复制。\n\n注意两点：\n1. 雪花 ID 是 19 位，超过 JavaScript 安全整数范围，一律以字符串传递。集合里的请求体已经是这个写法，改成数字就会 404。\n2. 签到有窗口限制（时段开始前 15 分钟到开始后 20 分钟）。用未来日期下的单签不了到，属于预期行为。",
+    "description": "高校自习室座位预约平台的接口集合。\n\n按目录顺序执行即可跑通完整闭环：\n  01 准备       注册 -> 登录（自动保存 token）\n  02 管理端     建自习室 -> 批量生成座位\n  03 预约闭环   查空座 -> 下单 -> 我的预约 -> 签到 -> 取消 -> 再查空座 -> 热门排行\n\n登录成功后 token 会自动写入集合变量，后续请求由集合级鉴权自动携带。\nroomId / seatId / reservationId 同样在脚本里自动串联，不需要手工复制。\n\n注意两点：\n1. 雪花 ID 是 19 位，超过 JavaScript 安全整数范围，一律以字符串传递。集合里的请求体已经是这个写法，改成数字就会 404。\n2. 签到有窗口限制（时段开始前 15 分钟到开始后 20 分钟）。用未来日期下的单签不了到，属于预期行为。",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -37,6 +37,7 @@
     { "key": "seatId", "value": "", "type": "string" },
     { "key": "reservationId", "value": "", "type": "string" },
     { "key": "date", "value": "", "type": "string" },
+    { "key": "idempotentToken", "value": "", "type": "string" },
     { "key": "slotId", "value": "2", "type": "string" }
   ],
   "item": [
@@ -239,17 +240,45 @@
           ]
         },
         {
+          "name": "获取幂等令牌（自动保存）",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": { "raw": "{{baseUrl}}/reservation/token", "host": ["{{baseUrl}}"], "path": ["reservation", "token"] },
+            "description": "下单前先拿一个一次性令牌，放进下单请求的 Idempotent-Token 头。\n令牌与当前登录用户绑定、5 分钟内有效，且只能提交成功一次。"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('拿到一次性令牌', () => pm.expect(res.code).to.eql(200));",
+                  "if (res.code === 200) {",
+                  "    pm.collectionVariables.set('idempotentToken', res.data);",
+                  "    console.log('已保存 idempotentToken =', res.data);",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "预约下单（自动保存 reservationId）",
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Idempotent-Token", "value": "{{idempotentToken}}" }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"seatId\": \"{{seatId}}\",\n  \"reserveDate\": \"{{date}}\",\n  \"slotId\": \"{{slotId}}\"\n}",
               "options": { "raw": { "language": "json" } }
             },
             "url": { "raw": "{{baseUrl}}/reservation", "host": ["{{baseUrl}}"], "path": ["reservation"] },
-            "description": "请求体里没有 userId——下单人只从 token 取。\n返回 data 就是新预约单的 ID，脚本会自动存起来供签到/取消使用。\n座位被抢会返回 1001；同一人同一时段已有有效预约返回的也是 1001。"
+            "description": "请求体里没有 userId——下单人只从 token 取。\n★ 请求头必须带 Idempotent-Token：先跑上一个请求「获取幂等令牌」。同一个令牌只能提交成功一次，重复提交返回 1006；要再下一单请重新获取。\n令牌与当前登录用户绑定、5 分钟内有效；别人拿到也用不了。\n返回 data 就是新预约单的 ID，脚本会自动存起来供签到/取消使用。\n座位被抢返回 1001；同一人同一时段已有有效预约返回 1015。"
           },
           "event": [
             {
@@ -321,6 +350,36 @@
             },
             "description": "取消之后跑这一步，刚才那个座位应该重新出现在列表里。\n这一步验证的是 occupy_flag = NULL 这条链路是通的——它断了，M3 的延时队列自动释放会跟着一起坏。"
           }
+        },
+        {
+          "name": "热门座位排行（TOP N）",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/reservation/admin/seat/hotTopN?roomId={{roomId}}&topN=5",
+              "host": ["{{baseUrl}}"],
+              "path": ["reservation", "admin", "seat", "hotTopN"],
+              "query": [
+                { "key": "roomId", "value": "{{roomId}}" },
+                { "key": "topN", "value": "5" }
+              ]
+            },
+            "description": "按「被预约次数」排序的 ZSet 榜单，降序返回 seatId 列表。\n计分发生在下单成功后；取消不扣分。榜单只在 Redis 里，重启会丢。"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const res = pm.response.json();",
+                  "pm.test('返回 200', () => pm.expect(res.code).to.eql(200));",
+                  "console.log('榜单座位数 =', (res.data || []).length, res.data);"
+                ]
+              }
+            }
+          ]
         }
       ]
     }
