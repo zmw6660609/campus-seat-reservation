@@ -11,6 +11,7 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 @Slf4j
 @RestControllerAdvice
@@ -55,6 +56,18 @@ public class GlobalExceptionHandler {
         String msg = "缺少必填参数 " + e.getParameterName();
         log.warn("缺少参数：{}", e.getMessage());
         return Result.error(ResultCode.PARAM_ERROR.getCode(), msg);
+    }
+
+    /**
+     * 路径不存在（Spring 6.1 起未匹配的请求抛的是 NoResourceFoundException，
+     * 不再是 404）。
+     * 不单独接住的话会被下面的兜底处理器接走，变成「500 系统繁忙」——
+     * 调用方会以为服务端挂了，实际只是地址写错。
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public Result<?> handleNoResourceFound(NoResourceFoundException e) {
+        log.warn("路径不存在：{}", e.getMessage());
+        return Result.error(ResultCode.NOT_FOUND);
     }
 
     @ExceptionHandler(Exception.class)
