@@ -21,6 +21,7 @@ import com.sr.pojo.entity.TimeSlot;
 import com.sr.pojo.vo.ReservationVO;
 import com.sr.service.ReservationService;
 import com.sr.util.RedisLockUtil;
+import com.sr.util.RedisRateLimitUtil;
 import com.sr.util.RedissonLockUtil;
 import jakarta.annotation.Resource;
 import org.redisson.api.RLock;
@@ -51,6 +52,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.LockSupport;
 import java.util.stream.Collectors;
 
+
 @Service
 public class ReservationServiceImpl implements ReservationService {
     /** 用户信用分低于这个值就不让预约 */
@@ -80,6 +82,9 @@ public class ReservationServiceImpl implements ReservationService {
 
     @Resource
     private RedissonClient redissonClient;
+
+    @Resource
+    private RedisRateLimitUtil redisRateLimitUtil;
 
     private final ScheduledExecutorService scheduledExecutor = Executors.newSingleThreadScheduledExecutor();
 
@@ -185,6 +190,11 @@ public class ReservationServiceImpl implements ReservationService {
         SysUser user = sysUserMapper.selectById(userId);
         if (user == null || user.getCreditScore() < MIN_CREDIT_SCORE) {
             throw new BizException(ResultCode.CREDIT_NOT_ENOUGH);
+        }
+
+        boolean pass = redisRateLimitUtil.tryAcquireReserveLimit(userId,10,5);
+        if (!pass) {
+            throw new BizException(ResultCode.TOO_MANY_REQUESTS);
         }
 
         // ①~④ 都是「读别的表做校验」，不涉及会冲突的数据，所以放在锁外做，尽量缩短持锁时间。
@@ -454,6 +464,7 @@ public class ReservationServiceImpl implements ReservationService {
             redisTemplate.delete(cacheKey);
         }, 500, TimeUnit.MILLISECONDS);
     }
+
 
 
 }

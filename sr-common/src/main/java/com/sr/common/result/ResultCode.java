@@ -25,7 +25,8 @@ public enum ResultCode {
     RESERVATION_TIME_CANCEL_FORBIDDEN(1013,"时段已开始，无法手动取消"),
     RESERVATION_SIGN_TIME_ILLEGAL(1014, "不在签到时间窗口内"),
     USER_SLOT_ALREADY_RESERVED(1015, "你在该时段已有预约，不能重复预约"),
-    CONCURRENT_CONFLICT(1016, "操作冲突，请重试");
+    CONCURRENT_CONFLICT(1016, "操作冲突，请重试"),
+    TOO_MANY_REQUESTS(1017, "操作过于频繁，请稍后再试");
 
     private final Integer code;
     private final String msg;
