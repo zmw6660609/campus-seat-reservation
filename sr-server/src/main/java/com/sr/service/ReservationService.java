@@ -17,7 +17,7 @@ public interface ReservationService {
      * 预约下单，返回新生成的预约单 ID —— 前端拿它去签到或取消。
      * 失败时抛 BizException。
      */
-    Long createReservation(CreateReservationDTO dto);
+    Long createReservation(CreateReservationDTO dto,String idempotentToken);
 
     /**
      * 取消预约。事务边界由实现类上的 @Transactional 负责 ——

@@ -9,4 +9,6 @@ public class RedisKeyConstant {
     public static final String RANK_HOT_SEAT = "rank:hot:seat:";
     public static final String RATE_LIMIT_RESERVE_USER = "rate:reserve:user:%s";
 
+    public static final String IDEMPOTENT_TOKEN = "idempotent:token:%s";
+
 }

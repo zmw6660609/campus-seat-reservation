@@ -8,6 +8,7 @@ import com.sr.pojo.entity.Seat;
 import com.sr.pojo.vo.ReservationVO;
 import com.sr.service.ReservationService;
 import jakarta.annotation.Resource;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.*;
@@ -42,8 +43,9 @@ public class ReservationController {
      * 注意体里没有 userId —— 下单人从 token 取（LoginInterceptor 放进 UserContext 的那个）。
      */
     @PostMapping
-    public Result<Long> create(@Valid @RequestBody CreateReservationDTO dto) {
-        return Result.success(reservationService.createReservation(dto));
+    public Result<Long> create(@Valid @RequestBody CreateReservationDTO dto, HttpServletRequest request) {
+        String idempotentToken = request.getHeader("Idempotent-Token");
+        return Result.success(reservationService.createReservation(dto,idempotentToken));
     }
 
     @PostMapping("/cancel")

@@ -157,15 +157,19 @@ public class ReservationServiceImpl implements ReservationService {
      * 的窗口，后一个请求拿到锁时读到的还是旧数据。
      */
     @Override
-    public Long createReservation(CreateReservationDTO dto) {
+    public Long createReservation(CreateReservationDTO dto,String idempotentToken) {
         // 下单人是谁，只能从 token 里取。DTO 里没有 userId，也不该有。
         Long userId = UserContext.get();
+        boolean pass = redisRateLimitUtil.tryAcquireReserveLimit(userId,10,5);
+        if (!pass) {
+            throw new BizException(ResultCode.TOO_MANY_REQUESTS);
+        }
+
         Long seatId = dto.getSeatId();
         Long slotId = dto.getSlotId();
         LocalDate reserveDate = dto.getReserveDate();
         String lockKey = RedisKeyConstant.LOCK_RESERVE + userId + ":" + reserveDate + ":" + slotId;
-
-        // ① 时段必须存在且启用
+// ① 时段必须存在且启用
         //    ★ 查的是 slotId，不是 userId —— 这两个都是 Long，编译器不会帮你发现传错了
         TimeSlot timeSlot = timeSlotMapper.selectById(slotId);
         if (timeSlot == null || timeSlot.getStatus() != 1) {
@@ -192,22 +196,39 @@ public class ReservationServiceImpl implements ReservationService {
             throw new BizException(ResultCode.CREDIT_NOT_ENOUGH);
         }
 
-        boolean pass = redisRateLimitUtil.tryAcquireReserveLimit(userId,10,5);
-        if (!pass) {
-            throw new BizException(ResultCode.TOO_MANY_REQUESTS);
+
+        if (idempotentToken == null || idempotentToken.isBlank()) {
+            throw new BizException(ResultCode.REPEAT_SUBMIT);
+        }
+        String idempotentKey = String.format(RedisKeyConstant.IDEMPOTENT_TOKEN, idempotentToken);
+        // SETNX消费令牌
+        Boolean consumeOk = redisTemplate.opsForValue()
+                .setIfAbsent(idempotentKey, "1", 5, TimeUnit.MINUTES);
+        if (!Boolean.TRUE.equals(consumeOk)) {
+            throw new BizException(ResultCode.REPEAT_SUBMIT);
         }
 
-        // ①~④ 都是「读别的表做校验」，不涉及会冲突的数据，所以放在锁外做，尽量缩短持锁时间。
-        // 下面才是真正的临界区：锁在外面，事务在里面 —— 这样 unlock 必然发生在事务提交之后。
+        try {
+            // 幂等通过，进入分布式锁 + 业务事务
+            // ①~④ 都是「读别的表做校验」，不涉及会冲突的数据，所以放在锁外做，尽量缩短持锁时间。
+            // 下面才是真正的临界区：锁在外面，事务在里面 —— 这样 unlock 必然发生在事务提交之后。
+            //
+            // 方案 B（当前启用）：Redisson 分布式锁，带看门狗自动续期 =====
+            // 好处是不用自己估过期时间，业务没跑完看门狗会续期，不会出现「锁提前过期」。
+            String lockingKey = RedisKeyConstant.LOCK_RESERVE + userId + ":" + reserveDate + ":" + slotId;
+            return redissonLockUtil.executeWithLock(lockingKey, 3, () ->
+                    transactionTemplate.execute(status ->
+                            doCreateReservation(status, userId, seatId, slotId, reserveDate, timeSlot,seat)
+                    )
+            );
+        } catch (BizException e) {
+            // ✅ 业务异常：归还令牌，可以重试
+            redisTemplate.delete(idempotentKey);
+            throw e;
+        }
 
-        // ===== 方案 B（当前启用）：Redisson 分布式锁，带看门狗自动续期 =====
-        // 好处是不用自己估过期时间，业务没跑完看门狗会续期，不会出现「锁提前过期」。
-        return redissonLockUtil.executeWithLock(lockKey, 3, () ->
-                // 内层：编程式事务，事务提交完成才退出这个 lambda，随后工具内部 finally 释放锁
-                transactionTemplate.execute(status ->
-                        doCreateReservation(status, userId, seatId, slotId, reserveDate, timeSlot, seat)
-                )
-        );
+
+
 
         // ===== 方案 A（M3-2 手写锁，保留作对比，默认不启用）=====
         // 与方案 B 逻辑等价：SETNX 加锁 + 过期时间 + UUID 标识 + Lua 脚本释放 + 自旋等待。
