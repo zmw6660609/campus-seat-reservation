@@ -66,4 +66,13 @@ public class ReservationController {
         List<ReservationVO> list = reservationService.getMyReservationList();
         return Result.success(list);
     }
+
+    @GetMapping("/admin/seat/hotTopN")
+    public Result<List<Long>> getHotSeatTopN(
+            @RequestParam Long roomId,
+            @RequestParam(defaultValue = "10") Integer topN
+    ) {
+        List<Long> list = reservationService.getHotSeatTopN(roomId, topN);
+        return Result.success(list);
+    }
 }
