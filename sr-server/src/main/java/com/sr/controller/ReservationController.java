@@ -37,15 +37,28 @@ public class ReservationController {
     }
 
     /**
+     * 签发一个一次性提交令牌。
+     * GET /reservation/token
+     *
+     * 前端进下单页时先调它，把返回值放进下单请求的 Idempotent-Token 头里。
+     * 令牌和当前登录用户绑定，别人拿到也用不了（下单时会校验归属）。
+     */
+    @GetMapping("/token")
+    public Result<String> token() {
+        return Result.success(reservationService.issueIdempotentToken());
+    }
+
+    /**
      * 预约下单，返回新预约单的 ID。
      * POST /reservation  body: {"seatId":..., "reserveDate":"2026-10-08", "slotId":2}
+     * 请求头: Idempotent-Token: <GET /reservation/token 拿到的令牌>
      *
      * 注意体里没有 userId —— 下单人从 token 取（LoginInterceptor 放进 UserContext 的那个）。
      */
     @PostMapping
     public Result<Long> create(@Valid @RequestBody CreateReservationDTO dto, HttpServletRequest request) {
         String idempotentToken = request.getHeader("Idempotent-Token");
-        return Result.success(reservationService.createReservation(dto,idempotentToken));
+        return Result.success(reservationService.createReservation(dto, idempotentToken));
     }
 
     @PostMapping("/cancel")

@@ -11,4 +11,7 @@ public class RedisKeyConstant {
 
     public static final String IDEMPOTENT_TOKEN = "idempotent:token:%s";
 
+    /** 签发凭证：记录「这个一次性令牌是服务端发给谁的」。下单时用来校验令牌归属 */
+    public static final String IDEMPOTENT_TOKEN_ISSUED = "idempotent:issued:%s";
+
 }

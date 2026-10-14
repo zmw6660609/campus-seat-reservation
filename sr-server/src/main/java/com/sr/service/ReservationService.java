@@ -14,6 +14,12 @@ public interface ReservationService {
     List<Seat> getAvailableSeats(Long roomId, LocalDate date, Long slotId);
 
     /**
+     * 签发一个一次性提交令牌，并把它和当前登录用户绑定。
+     * 前端进下单页时先调它，再把返回值放进下单请求的 Idempotent-Token 头里。
+     */
+    String issueIdempotentToken();
+
+    /**
      * 预约下单，返回新生成的预约单 ID —— 前端拿它去签到或取消。
      * 失败时抛 BizException。
      */

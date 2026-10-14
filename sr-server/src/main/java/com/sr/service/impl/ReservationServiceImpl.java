@@ -43,13 +43,13 @@ import java.time.ZoneId;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.LockSupport;
 import java.util.stream.Collectors;
-
 
 @Service
 public class ReservationServiceImpl implements ReservationService {
@@ -166,8 +166,8 @@ public class ReservationServiceImpl implements ReservationService {
         Long seatId = dto.getSeatId();
         Long slotId = dto.getSlotId();
         LocalDate reserveDate = dto.getReserveDate();
-        String lockKey = RedisKeyConstant.LOCK_RESERVE + userId + ":" + reserveDate + ":" + slotId;
-// ① 时段必须存在且启用
+
+        // ① 时段必须存在且启用
         //    ★ 查的是 slotId，不是 userId —— 这两个都是 Long，编译器不会帮你发现传错了
         TimeSlot timeSlot = timeSlotMapper.selectById(slotId);
         if (timeSlot == null || timeSlot.getStatus() != 1) {
@@ -198,6 +198,18 @@ public class ReservationServiceImpl implements ReservationService {
         if (idempotentToken == null || idempotentToken.isBlank()) {
             throw new BizException(ResultCode.REPEAT_SUBMIT);
         }
+
+        // 令牌必须是服务端签发给当前用户的，客户端自己造的串不认。
+        // 「签发记录」和「消费标记」故意分成两个 key：
+        //   消费标记（idempotent:token:）在业务失败时会被删掉，允许用户换座位重试；
+        //   签发记录（idempotent:issued:）留着不删 —— 否则重试时就分不清手里的
+        //   令牌是伪造的、还是刚被归还的。
+        String issuedKey = String.format(RedisKeyConstant.IDEMPOTENT_TOKEN_ISSUED, idempotentToken);
+        Object owner = redisTemplate.opsForValue().get(issuedKey);
+        if (owner == null || !String.valueOf(userId).equals(owner.toString())) {
+            throw new BizException(ResultCode.REPEAT_SUBMIT);
+        }
+
         String idempotentKey = String.format(RedisKeyConstant.IDEMPOTENT_TOKEN, idempotentToken);
         // SETNX消费令牌
         Boolean consumeOk = redisTemplate.opsForValue()
@@ -224,9 +236,6 @@ public class ReservationServiceImpl implements ReservationService {
             redisTemplate.delete(idempotentKey);
             throw e;
         }
-
-
-
 
         // ===== 方案 A（M3-2 手写锁，保留作对比，默认不启用）=====
         // 与方案 B 逻辑等价：SETNX 加锁 + 过期时间 + UUID 标识 + Lua 脚本释放 + 自旋等待。
@@ -473,6 +482,17 @@ public class ReservationServiceImpl implements ReservationService {
         return objSet.stream()
                 .map(obj -> Long.parseLong(obj.toString()))
                 .collect(Collectors.toList());
+    }
+
+    @Override
+    public String issueIdempotentToken() {
+        Long userId = UserContext.get();
+        String token = UUID.randomUUID().toString().replace("-", "");
+        // 记一笔「这个令牌是服务端发给谁的」，和当前登录用户绑定。
+        redisTemplate.opsForValue().set(
+                String.format(RedisKeyConstant.IDEMPOTENT_TOKEN_ISSUED, token),
+                String.valueOf(userId), 5, TimeUnit.MINUTES);
+        return token;
     }
 
     private void evictAvailableCache(Long roomId, LocalDate reserveDate, Long slotId)
