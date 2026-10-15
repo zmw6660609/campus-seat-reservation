@@ -16,4 +16,8 @@ public class RedisKeyConstant {
 
     public static final String ROLE_PERMISSION = "role:permission:";
 
+    /** 报表缓存。报表是慢变数据，TTL 用 60 秒 —— 和座位可用性缓存不是一回事（那边是强一致场景） */
+    public static final String STATS_OCCUPANCY = "stats:occupancy:";
+    public static final String STATS_TREND = "stats:trend:";
+
 }

@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.sr.mapper.StatsMapper">
+
+    <!-- ========================================================================
+         上座率：一次查询出「分母 + 各时段分子」，不在 Java 里按时段循环查库。
+
+         ★ 两个极其容易算错的地方（都实测过）：
+
+         ① 分子不能只算 occupy_flag = 1。
+            occupy_flag 的设计是：占用中（已预约/已签到）为 1，**完成(3) / 取消(4) /
+            违规(5) 之后置回 NULL**。所以拿 occupy_flag = 1 去查**历史日期**，
+            上座率会全部变成 0 —— 而历史日期恰恰是报表最常看的。
+            正确口径是「有效预约」= 排除已取消（status &lt;&gt; 4）。
+
+         ② 分子必须 COUNT(DISTINCT seat_id)，不能 COUNT(*)。
+            同一个座位在同一个时段完全可能留下两条记录：先违规释放(5)，再被别人订走(1)。
+            直接 COUNT(*) 会把同一个座位算两次，上座率能超过 100%。
+         ======================================================================== -->
+    <select id="selectSlotOccupancy" resultType="com.sr.pojo.vo.SlotOccupancyVO">
+        SELECT ts.id                AS slotId,
+               ts.name              AS slotName,
+               ts.start_time        AS startTime,
+               ts.end_time          AS endTime,
+               c.total              AS total,
+               IFNULL(o.occupied, 0) AS occupied
+        FROM time_slot ts
+                 CROSS JOIN (SELECT COUNT(*) AS total
+                             FROM seat
+                             WHERE room_id = #{roomId}
+                               AND status = 1
+                               AND deleted = 0) c
+                 LEFT JOIN (SELECT r.slot_id,
+                                   COUNT(DISTINCT r.seat_id) AS occupied
+                            FROM reservation r
+                            WHERE r.room_id = #{roomId}
+                              AND r.reserve_date = #{date}
+                              AND r.status &lt;&gt; 4
+                            GROUP BY r.slot_id) o ON o.slot_id = ts.id
+        WHERE ts.status = 1
+        ORDER BY ts.slot_no
+    </select>
+
+    <!-- 预约趋势：按 reserve_date 分组。
+         用 COUNT(CASE WHEN ... THEN 1 END) 而不是 SUM(status = 4) ——
+         后者在 MySQL 里返回 DECIMAL，映射到 Long 字段时类型转换容易出问题；
+         COUNT(CASE ...) 返回的是 BIGINT。
+
+         没有单的日期不会出现在结果里（不补零）。
+         要不要补零是**展示层**的事：接口只给有数据的日期，前端按日期轴对齐即可。 -->
+    <select id="selectDailyTrend" resultType="com.sr.pojo.vo.DailyTrendVO">
+        SELECT r.reserve_date                                     AS reserveDate,
+               COUNT(*)                                           AS totalCount,
+               COUNT(CASE WHEN r.status IN (2, 3) THEN 1 END)      AS checkedInCount,
+               COUNT(CASE WHEN r.status = 4 THEN 1 END)           AS cancelledCount,
+               COUNT(CASE WHEN r.status = 5 THEN 1 END)           AS violationCount
+        FROM reservation r
+        WHERE r.reserve_date BETWEEN #{startDate} AND #{endDate}
+        GROUP BY r.reserve_date
+        ORDER BY r.reserve_date
+    </select>
+
+</mapper>
