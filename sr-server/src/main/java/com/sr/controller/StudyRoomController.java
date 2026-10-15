@@ -1,6 +1,7 @@
 package com.sr.controller;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.sr.annotation.RequirePermission;
 import com.sr.common.exception.BizException;
 import com.sr.common.result.PageResult;
 import com.sr.common.result.Result;
@@ -21,6 +22,7 @@ public class StudyRoomController {
 
     /** 新增自习室 */
     @PostMapping
+    @RequirePermission("room:write")
     public Result<Void> add(@RequestBody StudyRoom studyRoom) {
         studyRoomService.save(studyRoom);
         return Result.success();
@@ -28,6 +30,7 @@ public class StudyRoomController {
 
     /** 修改自习室 */
     @PutMapping
+    @RequirePermission("room:write")
     public Result<Void> update(@RequestBody StudyRoom studyRoom) {
         if (studyRoom.getId() == null) {
             throw new BizException(ResultCode.PARAM_ERROR);
@@ -38,6 +41,7 @@ public class StudyRoomController {
 
     /** 删除自习室（逻辑删除，不是真删） */
     @DeleteMapping("/{id}")
+    @RequirePermission("room:write")
     public Result<Void> delete(@PathVariable Long id) {
         studyRoomService.removeById(id);
         return Result.success();

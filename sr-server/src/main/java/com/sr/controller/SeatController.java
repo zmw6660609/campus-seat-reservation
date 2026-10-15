@@ -1,6 +1,7 @@
 package com.sr.controller;
 
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.sr.annotation.RequirePermission;
 import com.sr.common.exception.BizException;
 import com.sr.common.result.PageResult;
 import com.sr.common.result.Result;
@@ -23,6 +24,7 @@ public class SeatController {
 
     /** 新增单个座位 */
     @PostMapping
+    @RequirePermission("seat:write")
     public Result<Void> add(@RequestBody Seat seat) {
         seatService.save(seat);
         return Result.success();
@@ -30,6 +32,7 @@ public class SeatController {
 
     /** 修改座位 */
     @PutMapping
+    @RequirePermission("seat:write")
     public Result<Void> update(@RequestBody Seat seat) {
         if (seat.getId() == null) {
             throw new BizException(ResultCode.PARAM_ERROR);
@@ -40,6 +43,7 @@ public class SeatController {
 
     /** 删除座位（逻辑删除，不是真删） */
     @DeleteMapping("/{id}")
+    @RequirePermission("seat:write")
     public Result<Void> delete(@PathVariable Long id) {
         seatService.removeById(id);
         return Result.success();
@@ -73,6 +77,7 @@ public class SeatController {
 
     /** 批量生成座位：给定自习室 + 行列数，一次建出一整片座位 */
     @PostMapping("/batch-generate")
+    @RequirePermission("seat:write")
     public Result<Void> batchGenerate(@Valid @RequestBody GenerateSeatDTO dto) {
         seatService.batchGenerateSeat(dto);
         return Result.success();

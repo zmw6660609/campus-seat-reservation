@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.sr.mapper.SysPermissionMapper">
+
+    <!-- 某个角色拥有哪些权限点。
+         数据量极小（角色 × 权限点），调用方 PermissionServiceImpl 会缓存 10 分钟，
+         所以这条 SQL 正常情况下很少被执行到。 -->
+    <select id="selectCodesByRole" resultType="java.lang.String">
+        SELECT permission_code
+        FROM sys_role_permission
+        WHERE role_code = #{roleCode};
+    </select>
+
+</mapper>

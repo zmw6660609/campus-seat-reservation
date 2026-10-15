@@ -1,5 +1,6 @@
 package com.sr.controller;
 
+import com.sr.annotation.RequirePermission;
 import com.sr.common.result.Result;
 import com.sr.pojo.dto.CancelReservationDTO;
 import com.sr.pojo.dto.CheckinReservationDTO;
@@ -80,7 +81,9 @@ public class ReservationController {
         return Result.success(list);
     }
 
+    /** 管理端：热门座位榜单（归到 stats:read —— 它是给管理端看的统计视角） */
     @GetMapping("/admin/seat/hotTopN")
+    @RequirePermission("stats:read")
     public Result<List<Long>> getHotSeatTopN(
             @RequestParam Long roomId,
             @RequestParam(defaultValue = "10") Integer topN

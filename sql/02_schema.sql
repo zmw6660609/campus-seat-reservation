@@ -27,6 +27,9 @@ USE seat_reservation;
 -- 留着既容易混淆也容易误操作。这一行专门清掉那份历史遗留，首次执行无任何影响。
 DROP TABLE IF EXISTS `user`;
 
+DROP TABLE IF EXISTS `sys_role_permission`;
+DROP TABLE IF EXISTS `sys_permission`;
+DROP TABLE IF EXISTS `sys_role`;
 DROP TABLE IF EXISTS `reservation`;
 DROP TABLE IF EXISTS `time_slot`;
 DROP TABLE IF EXISTS `seat`;
@@ -42,7 +45,7 @@ CREATE TABLE `sys_user` (
     `password`     VARCHAR(100)    NOT NULL               COMMENT 'BCrypt 密文。长度必须够：BCrypt 固定输出 60 字符',
     `name`         VARCHAR(30)     NOT NULL DEFAULT ''    COMMENT '真实姓名',
     `phone`        VARCHAR(20)     NOT NULL DEFAULT ''    COMMENT '手机号',
-    `role`         TINYINT         NOT NULL DEFAULT 0     COMMENT '角色：0=学生 1=管理员 2=超管（M4 换成 RBAC 五表）',
+    `role`         TINYINT         NOT NULL DEFAULT 0     COMMENT '角色编码，对应 sys_role.code：0=学生 1=管理员。注册接口只会写 0，提权靠 SQL',
     `credit_score` INT             NOT NULL DEFAULT 100   COMMENT '信用分，初始 100，违约扣分（M3 用）',
     `status`       TINYINT         NOT NULL DEFAULT 1     COMMENT '状态：1=正常 0=禁用',
     `create_time`  DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -177,6 +180,78 @@ CREATE TABLE `reservation` (
     KEY `idx_room_date_slot` (`room_id`, `reserve_date`, `slot_id`),
     KEY `idx_status_deadline` (`status`, `deadline`)
 ) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT ='预约单';
+
+-- ============================================================================
+-- 5. 权限（RBAC）
+-- ============================================================================
+-- 三张表解决一个问题：**登录 ≠ 有权**。
+-- 在 M4-1 之前，任何注册用户都能调 POST/PUT/DELETE /study-room 改自习室 ——
+-- LoginInterceptor 只校验 token 有效性，sys_user.role 建表起就没被任何一处读过。
+--
+-- ★ 为什么不建「标准 RBAC 五表」里的 sys_user_role？
+--   1) 本项目一个用户只有一个角色（学生 **或** 管理员），多对多是「为不需要的灵活性付复杂度」；
+--   2) sys_user.role 从 M1 就在，它已经是「用户角色」的唯一真相源。
+--      再加一张 sys_user_role 就会出现**两个真相源** —— 和 study_room.capacity
+--      不叫 total_seat 是同一个道理（诚实的数据命名，能省掉未来无数次"这两个数为什么不一样"）。
+--
+-- ★ 为什么 sys_role_permission 必须建？
+--   它才是权限体系的价值所在。以后加一个「助教」角色（能看统计报表、不能改座位），
+--   只要往这张表里插两行，**不用改代码、不用发版**。
+--   直接写 if (role == 1) 的话，加角色就得改代码 —— 那等于没做权限体系。
+
+CREATE TABLE `sys_role` (
+    `code`        TINYINT      NOT NULL                COMMENT '角色编码，与 sys_user.role 对应',
+    `name`        VARCHAR(20)  NOT NULL                COMMENT '角色名',
+    `remark`      VARCHAR(100) NOT NULL DEFAULT ''     COMMENT '说明',
+    `create_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`code`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT ='角色字典';
+
+-- 为什么用 TINYINT code 做主键，而不是雪花 id？
+--   角色是「极少量 + 稳定」的字典数据（就两个），可读性比全局唯一更有用：
+--   sys_user.role = 1 一眼就知道是管理员，不用再回表查一次。
+
+CREATE TABLE `sys_permission` (
+    `code`        VARCHAR(50)  NOT NULL                COMMENT '权限点编码，如 room:write',
+    `name`        VARCHAR(30)  NOT NULL                COMMENT '权限名',
+    `create_time` DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`code`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT ='权限点字典';
+
+CREATE TABLE `sys_role_permission` (
+    `role_code`       TINYINT     NOT NULL             COMMENT '对应 sys_role.code',
+    `permission_code` VARCHAR(50) NOT NULL             COMMENT '对应 sys_permission.code',
+    PRIMARY KEY (`role_code`, `permission_code`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COMMENT ='角色 -> 权限点';
+
+-- 联合主键天然防重，不需要再建唯一索引。
+-- 没上外键：和全项目保持一致（约束写在 Service 层 + 表注释里），
+-- 换来的好处是插种子数据、清理数据时不用考虑外键顺序。
+
+INSERT INTO `sys_role` (`code`, `name`, `remark`) VALUES
+    (0, 'STUDENT', '学生：只能预约与查看'),
+    (1, 'ADMIN',   '管理员：可管理自习室、座位与报表');
+
+INSERT INTO `sys_permission` (`code`, `name`) VALUES
+    ('room:write',        '自习室增删改'),
+    ('seat:write',        '座位增删改与批量生成'),
+    ('reservation:read',  '查看全部预约'),
+    ('reservation:write', '人工处理预约（标记违约 / 释放座位）'),
+    ('stats:read',        '查看统计报表');
+
+INSERT INTO `sys_role_permission` (`role_code`, `permission_code`) VALUES
+    (1, 'room:write'),
+    (1, 'seat:write'),
+    (1, 'reservation:read'),
+    (1, 'reservation:write'),
+    (1, 'stats:read');
+
+-- 学生角色（code=0）的权限集合是**空的**：学生的接口都是「登录即可」，本来就没有需要挡的操作。
+-- 这不是偷懒 —— 权限点是给「以后要细分」留的插槽（比如只让助教看报表）。
+--
+-- 管理员账号怎么来：注册接口永远写 role=0（不能让人自己注册成管理员），提权靠一条 SQL：
+--   UPDATE sys_user SET role = 1 WHERE username = 'admin';
+
 
 -- ============================================================================
 -- 【本表最重要的三个设计】
