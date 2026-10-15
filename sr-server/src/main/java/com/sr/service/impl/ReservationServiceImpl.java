@@ -1,8 +1,11 @@
 package com.sr.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.sr.common.exception.BizException;
+import com.sr.common.result.PageResult;
 import com.sr.common.result.ReservationStatus;
 import com.sr.common.result.ResultCode;
 import com.sr.constant.RedisKeyConstant;
@@ -11,6 +14,7 @@ import com.sr.mapper.ReservationMapper;
 import com.sr.mapper.SeatMapper;
 import com.sr.mapper.SysUserMapper;
 import com.sr.mapper.TimeSlotMapper;
+import com.sr.pojo.dto.AdminReservationQueryDTO;
 import com.sr.pojo.dto.CancelReservationDTO;
 import com.sr.pojo.dto.CheckinReservationDTO;
 import com.sr.pojo.dto.CreateReservationDTO;
@@ -18,6 +22,7 @@ import com.sr.pojo.entity.Reservation;
 import com.sr.pojo.entity.Seat;
 import com.sr.pojo.entity.SysUser;
 import com.sr.pojo.entity.TimeSlot;
+import com.sr.pojo.vo.AdminReservationVO;
 import com.sr.pojo.vo.ReservationVO;
 import com.sr.service.ReservationService;
 import com.sr.util.RedisLockUtil;
@@ -482,6 +487,64 @@ public class ReservationServiceImpl implements ReservationService {
         return objSet.stream()
                 .map(obj -> Long.parseLong(obj.toString()))
                 .collect(Collectors.toList());
+    }
+
+    @Override
+    public PageResult<AdminReservationVO> adminPage(AdminReservationQueryDTO dto) {
+        // 分页参数给默认值：不传就是第 1 页、每页 10 条。
+        // 直接 new Page<>(null, null) 会让分页插件拿到 null 的 size/current。
+        long pageNum = dto.getPageNum() == null ? 1 : dto.getPageNum();
+        long pageSize = dto.getPageSize() == null ? 10 : dto.getPageSize();
+        Page<AdminReservationVO> page = new Page<>(pageNum, pageSize);
+        IPage<AdminReservationVO> result = reservationMapper.selectAdminPage(page,
+                dto.getUserId(),
+                dto.getRoomId(),
+                dto.getReserveDate(),
+                dto.getStatus());
+        // 转成项目自己的 PageResult，不把 MyBatis-Plus 的 IPage 暴露给前端
+        return PageResult.of(result.getTotal(), result.getRecords());
+    }
+
+    /**
+     * 人工释放座位（管理端）。
+     *
+     * ★ 两个必须写对的地方：
+     *
+     * 1) 用 update(..., Wrappers...) 显式 set 字段，**不能用 updateById**。
+     *    MyBatis-Plus 的 updateById 默认是 NOT_NULL 策略：null 字段被静默跳过，
+     *    occupyFlag = null 根本不会写进 SQL → 返回 200 但座位没释放。
+     *    和 markViolation 用同一套写法。
+     *
+     * 2) 必须有 @Transactional。afterCommit 回调要求当前线程有活动事务，
+     *    没有事务时 registerSynchronization 会直接抛 IllegalStateException。
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void manualRelease(Long reservationId) {
+        Reservation reservation = reservationMapper.selectById(reservationId);
+        if (reservation == null) {
+            throw new BizException(ResultCode.RESERVATION_NOT_FOUND);
+        }
+        if (!ReservationStatus.RESERVED.getCode().equals(reservation.getStatus())) {
+            return;                     // 幂等：不是「已预约」状态就直接返回，不报错
+        }
+        // WHERE 里带上 status/occupy_flag 条件 —— 并发下只有一个人能改成功，天然幂等
+        reservationMapper.update(null, Wrappers.lambdaUpdate(Reservation.class)
+                .set(Reservation::getStatus, ReservationStatus.CANCELLED.getCode())
+                .set(Reservation::getOccupyFlag, null)
+                .eq(Reservation::getId, reservationId)
+                .eq(Reservation::getStatus, ReservationStatus.RESERVED.getCode())
+                .eq(Reservation::getOccupyFlag, 1));
+
+        Long roomId = reservation.getRoomId();
+        LocalDate reserveDate = reservation.getReserveDate();
+        Long slotId = reservation.getSlotId();
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                evictAvailableCache(roomId, reserveDate, slotId);
+            }
+        });
     }
 
     @Override

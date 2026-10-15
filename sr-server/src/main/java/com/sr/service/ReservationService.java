@@ -1,9 +1,12 @@
 package com.sr.service;
 
+import com.sr.common.result.PageResult;
+import com.sr.pojo.dto.AdminReservationQueryDTO;
 import com.sr.pojo.dto.CancelReservationDTO;
 import com.sr.pojo.dto.CheckinReservationDTO;
 import com.sr.pojo.dto.CreateReservationDTO;
 import com.sr.pojo.entity.Seat;
+import com.sr.pojo.vo.AdminReservationVO;
 import com.sr.pojo.vo.ReservationVO;
 
 import java.time.LocalDate;
@@ -39,5 +42,12 @@ public interface ReservationService {
     void markViolation(Long reservationId);
     List<Long> getHotSeatTopN(Long roomId, int topN);
 
+    /**
+     * 管理端分页查询全部预约。
+     * 返回 PageResult 而不是 MyBatis-Plus 的 IPage —— IPage 里带着 orders/searchCount
+     * 等一堆前端用不到的字段，暴露它等于把持久层的数据结构焊死在接口契约上。
+     */
+    PageResult<AdminReservationVO> adminPage(AdminReservationQueryDTO dto);
 
+    void manualRelease(Long reservationId);
 }

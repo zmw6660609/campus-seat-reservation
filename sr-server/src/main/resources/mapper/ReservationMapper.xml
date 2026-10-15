@@ -17,5 +17,31 @@
           AND r.id IS NULL
         ORDER BY s.row_num, s.col_num;
     </select>
+    <!-- 管理端分页查询。
+         用 r.room_id（reservation 上的冗余列）而不是 s.room_id —— 那列存在的意义就是
+         「统计/排行免 join」，这里再绕回 seat 表去取就说不过去了；
+         这么写连 seat 表都不用 join（VO 要的 seatId 本来就在 reservation 上）。
+         分页由 MyBatis-Plus 的分页插件自动拼 LIMIT（靠方法第一个参数是 IPage 识别）。 -->
+    <select id="selectAdminPage" resultType="com.sr.pojo.vo.AdminReservationVO">
+        SELECT r.id,
+               r.user_id,
+               u.username,
+               r.seat_id,
+               r.room_id,
+               r.reserve_date,
+               r.slot_id,
+               r.status,
+               r.create_time,
+               r.deadline
+        FROM reservation r
+                 LEFT JOIN sys_user u ON r.user_id = u.id
+        <where>
+            <if test="userId != null">AND r.user_id = #{userId}</if>
+            <if test="roomId != null">AND r.room_id = #{roomId}</if>
+            <if test="reserveDate != null">AND r.reserve_date = #{reserveDate}</if>
+            <if test="status != null">AND r.status = #{status}</if>
+        </where>
+        ORDER BY r.create_time DESC
+    </select>
 
 </mapper>
