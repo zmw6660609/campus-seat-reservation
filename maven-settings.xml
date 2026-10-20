@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  镜像构建专用的 Maven 配置。
+
+  为什么需要它：容器里访问 repo.maven.apache.org 在国内基本连不通，
+  Maven 对每个下不动的构件要等 60 秒才超时，五六个包就是五六分钟，
+  最后抛一个看不出所以然的 PluginResolutionException。
+  换成阿里云镜像之后，同样的构建从"必然失败"变成一两分钟。
+
+  用法：Dockerfile 里 COPY 到 /root/.m2/settings.xml。
+  本机开发不要用它 —— 本机走的是 IDEA / 系统里已经能用的仓库配置。
+-->
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0
+                              https://maven.apache.org/xsd/settings-1.0.0.xsd">
+
+    <mirrors>
+        <mirror>
+            <id>aliyun-public</id>
+            <name>Aliyun Public Repository</name>
+            <url>https://maven.aliyun.com/repository/public</url>
+            <!-- mirrorOf 写 central 就够：插件仓库默认也是 central，会一起被代理 -->
+            <mirrorOf>central</mirrorOf>
+        </mirror>
+    </mirrors>
+
+</settings>

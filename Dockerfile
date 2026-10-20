@@ -9,12 +9,18 @@
 FROM maven:3.9-eclipse-temurin-17 AS builder
 WORKDIR /app
 
-# 先只拷 4 个 pom 再拉依赖：之后改 Java 代码不会让这一层缓存失效，重建快很多
+# 换成阿里云镜像。不换的话容器里连不上 repo.maven.apache.org，
+# 每个构件等 60 秒超时，最后抛一个看不出原因的 PluginResolutionException。
+COPY maven-settings.xml /root/.m2/settings.xml
+
+# 先只拷 4 个 pom 再拉依赖：之后改 Java 代码不会让这一层缓存失效，重建快很多。
+# -DexcludeGroupIds=com.sr 排除本项目自己的三个模块 —— 这时候还没有它们的源码和 jar，
+# 不加这个参数 go-offline 会直接失败。
 COPY pom.xml .
 COPY sr-common/pom.xml sr-common/
 COPY sr-pojo/pom.xml sr-pojo/
 COPY sr-server/pom.xml sr-server/
-RUN mvn -B -DskipTests dependency:go-offline || true
+RUN mvn -B -DskipTests dependency:go-offline -DexcludeGroupIds=com.sr
 
 # 再拷源码（.dockerignore 已经把 target 排除掉了）
 COPY sr-common/src sr-common/src
