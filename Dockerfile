@@ -10,8 +10,12 @@ FROM maven:3.9-eclipse-temurin-17 AS builder
 WORKDIR /app
 
 # 换成阿里云镜像。不换的话容器里连不上 repo.maven.apache.org，
-# 每个构件等 60 秒超时，最后抛一个看不出原因的 PluginResolutionException。
-COPY maven-settings.xml /root/.m2/settings.xml
+# 每个构件等 60 秒超时，最后抛一个看不出原因的 DependencyResolutionException。
+#
+# ⚠️ 千万别拷到 /root/.m2/settings.xml：下面的缓存挂载会把整个 /root/.m2 盖住，
+#    拷进去的 settings.xml 会被挂载点遮掉，Maven 相当于没配镜像，照样去连 central。
+#    这种"文件明明在里面却读不到"的错，报错信息里完全看不出来。
+COPY maven-settings.xml /opt/maven-settings.xml
 
 COPY pom.xml .
 COPY sr-common/pom.xml sr-common/
@@ -28,8 +32,9 @@ COPY sr-server/src sr-server/src
 # 排除 reactor 自己的模块、还要单独解析插件，是最容易失败的一步 ——
 # 收益不值这个风险。改用 BuildKit 的缓存挂载：~/.m2 存在构建缓存里，
 # 重建时依赖不用重新下载，也不会把几百 MB 的仓库塞进镜像层。
-RUN --mount=type=cache,target=/root/.m2 \
-    mvn -B clean package -DskipTests
+# -s 显式指定 settings 文件，不依赖 Maven 的默认查找路径。
+RUN --mount=type=cache,target=/root/.m2,id=campusbook-m2 \
+    mvn -s /opt/maven-settings.xml -B clean package -DskipTests
 
 # ---------- 阶段 2：运行镜像 ----------
 # 只用 JRE，镜像比 builder 小一个数量级，也没有 Maven 和源码

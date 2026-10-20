@@ -7,7 +7,8 @@
   最后抛一个看不出所以然的 PluginResolutionException。
   换成阿里云镜像之后，同样的构建从"必然失败"变成一两分钟。
 
-  用法：Dockerfile 里 COPY 到 /root/.m2/settings.xml。
+  用法：Dockerfile 里 COPY 到 /opt/maven-settings.xml，再用 mvn -s 指定。
+  ⚠️ 不要放到 /root/.m2/settings.xml：那里有 BuildKit 的缓存挂载，文件会被盖掉。
   本机开发不要用它 —— 本机走的是 IDEA / 系统里已经能用的仓库配置。
 -->
 <settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
@@ -20,8 +21,10 @@
             <id>aliyun-public</id>
             <name>Aliyun Public Repository</name>
             <url>https://maven.aliyun.com/repository/public</url>
-            <!-- mirrorOf 写 central 就够：插件仓库默认也是 central，会一起被代理 -->
-            <mirrorOf>central</mirrorOf>
+            <!-- external:* 比 central 更彻底：无论 POM 里声明的是 central 还是别的外网仓库，
+                 一律走阿里云。只排除 localhost / file:// 这类本地仓库。
+                 这个项目只依赖公共构件，用 * 不会误伤任何东西。 -->
+            <mirrorOf>external:*</mirrorOf>
         </mirror>
     </mirrors>
 
