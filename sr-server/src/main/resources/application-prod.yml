@@ -1,20 +1,26 @@
 spring:
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
-    url: ${DB_URL}
-    username: ${DB_USERNAME}
-    password: ${DB_PASSWORD}
-
+    # 与 dev 的差异只有 host/密码来源，参数一个都不能少：
+    #   allowPublicKeyRetrieval=true —— MySQL 8 默认 caching_sha2_password，缺了会报
+    #                                   "Public Key Retrieval is not allowed"
+    #   useSSL=false                —— 本地容器没配证书，强开 SSL 反而连不上
+    # 库名必须是 seat_reservation（和 sql/01_init.sql、02_schema.sql 一致，少一个字母就是空库）
+    url: jdbc:mysql://${MYSQL_HOST}:${MYSQL_PORT}/seat_reservation?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+    username: root
+    password: ${MYSQL_ROOT_PASSWORD}
   data:
     redis:
       host: ${REDIS_HOST}
-      port: ${REDIS_PORT:6379}
-      password: ${REDIS_PASSWORD:}
+      port: ${REDIS_PORT}
+      # 本地 compose 里的 redis 没开 requirepass，这里就不能配 password。
+      # 配了 ${REDIS_PASSWORD} 又没给值，启动时会直接抛
+      # "Could not resolve placeholder 'REDIS_PASSWORD'"。
       database: ${REDIS_DB:0}
 
-  sr:
-    jwt:
-      secret: ${JWT_SECRET}
+sr:
+  jwt:
+    secret: ${JWT_SECRET}
 
 # 说明：这里不再单独配置 mybatis-plus。
 # 生产环境的 SQL 日志必须关闭（既拖性能，也会把用户数据写进日志文件），

@@ -1,0 +1,28 @@
+# 构建上下文排除项。
+# 不写这个文件，docker 会把 target/（几十上百 MB）、.git、docs 全部塞进构建上下文，
+# 每次 build 都要传一遍，慢得莫名其妙。
+.git
+.gitignore
+.idea
+*.iml
+
+# 编译产物
+target
+**/target
+
+# 跟镜像没关系的东西
+docs
+postman
+sql
+*.md
+LICENSE
+
+# Docker 自己的文件
+Dockerfile
+docker-compose.yml
+
+# ⚠️ 绝对不能进镜像：里面是数据库密码和 JWT 密钥。
+# 运行时由 compose 通过 environment 注入，不要烤进镜像层。
+.env
+*.env
+**/application-dev.yml

@@ -37,3 +37,6 @@ build/
 
 # 环境配置
 application-dev.yml
+
+.env
+*.env

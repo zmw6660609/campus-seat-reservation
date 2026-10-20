@@ -26,6 +26,11 @@ mvnw         text eol=lf
 .gitignore     text eol=lf
 LICENSE        text eol=lf
 
+# Docker 相关：Dockerfile 没有扩展名，必须显式声明。
+# 如果被提交成 CRLF，容器里执行 RUN 时会带着 \r，报 "unknown instruction"
+Dockerfile     text eol=lf
+.dockerignore  text eol=lf
+
 # Windows 批处理必须是 CRLF，否则某些环境下会执行异常
 *.cmd        text eol=crlf
 *.bat        text eol=crlf

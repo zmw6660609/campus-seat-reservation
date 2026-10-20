@@ -1,0 +1,75 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: seat-mysql
+    # 容器里默认是 UTC。只给 TZ 环境变量不一定能改到 MySQL 的会话时区，
+    # 这里直接把服务器时区钉死，避免 create_time / deadline 差 8 小时。
+    command: --default-time-zone=+08:00
+    environment:
+      TZ: Asia/Shanghai
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      # 必须和 sql/01_init.sql、sql/02_schema.sql 里的库名一致，否则表建在 A 库、应用连 B 库
+      MYSQL_DATABASE: seat_reservation
+    # 注意：这里刻意不映射 3306。宿主机上已经有一个本地 MySQL 占着 3306，
+    # 映射出去会直接报 "port is already allocated"。用 13306 错开，
+    # 想用客户端看容器里的数据就连 127.0.0.1:13306。
+    ports:
+      - "13306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      # 初始化脚本只在「数据卷为空」时执行一次；改完 SQL 要 docker compose down -v 重来
+      - ./sql/01_init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+      - ./sql/02_schema.sql:/docker-entrypoint-initdb.d/02_schema.sql:ro
+    healthcheck:
+      # $$ 是 compose 的转义写法：让 $MYSQL_ROOT_PASSWORD 在容器里展开，而不是在 compose 里展开
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      # 第一次启动要跑建库建表脚本，给足时间，别让 healthcheck 提前判死
+      start_period: 20s
+    restart: unless-stopped
+
+  redis:
+    image: redis:5
+    container_name: seat-redis
+    environment:
+      TZ: Asia/Shanghai
+    ports:
+      - "16379:6379"
+    volumes:
+      - redis-data:/data
+    # 必须开 AOF：不开的话容器重启，延时队列和热门榜单全丢
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: seat-app
+    environment:
+      TZ: Asia/Shanghai
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: ${JWT_SECRET}
+    ports:
+      - "8080:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  mysql-data:
+  redis-data:
