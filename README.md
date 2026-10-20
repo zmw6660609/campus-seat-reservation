@@ -42,13 +42,35 @@
 理由：这些技术解决的是"多团队、多实例、超大规模"的问题，这个项目一个都没有。
 **把一件事做深，比堆十个名词有用。**
 
+## 整体结构
+
+```mermaid
+flowchart TB
+    C["客户端 / Postman"] --> A["Spring Boot 3.3 · sr-server<br/>接口层 → Service → Mapper"]
+    A -->|"座位可用性<br/>Cache Aside + 延迟双删"| R[("Redis 5<br/>缓存 · 分布式锁<br/>延时队列 · 令牌桶")]
+    A -->|"读写下单<br/>唯一索引 + CAS"| M[("MySQL 8<br/>seat_reservation")]
+    T["定时任务（每 30 秒）<br/>ZSet 到期检查"] --> R
+    T -->|"超时释放 · 标记违约"| M
+```
+
+## 功能清单
+
+| 端 | 能做什么 |
+|---|---|
+| 学生端 | 注册登录 / 按自习室 + 日期 + 时段查空座 / 预约下单（一次性令牌防重、令牌桶限流）/ 我的预约 / 取消 / 签到 / 热门座位排行 |
+| 管理端 | 自习室与座位增删改查 / 预约分页查询（按用户、日期、状态、自习室筛选）/ 标记违约 / 人工释放 / 上座率报表 / 预约趋势报表 |
+| 工程能力 | 统一返回体与错误码、JWT + Redis 白名单登录态、RBAC 权限点鉴权、全局异常处理、`docker compose up` 一键起全栈 |
+
 ## 工程结构
 
 ```
 campus-seat-reservation/           父工程：统一版本 + 模块聚合（packaging=pom）
 ├── docs/
+│   ├── walkthrough.md             30 分钟讲清这个项目（问题 → 方案 → 取舍 → 实测 → 局限）
+│   ├── qa.md                      常见追问与回答，每个都讲到边界和失败场景
 │   ├── M2-acceptance.md           M2 核心闭环验收记录（含并发实测数据）
-│   └── M3-acceptance.md           M3 技术亮点验收记录（九条亮点的「加之前 vs 加之后」）
+│   ├── M3-acceptance.md           M3 技术亮点验收记录（九条亮点的「加之前 vs 加之后」）
+│   └── M4-loadtest.md             压测环境、命令、结果与瓶颈分析
 ├── postman/
 │   └── CampusBook.postman_collection.json  接口集合，导入后可跑通完整闭环
 ├── sql/
@@ -215,6 +237,16 @@ M3 另外解决了三件事：**超时未签到自动释放座位**（ZSet 延�
 **接口层的滥用防护**（令牌桶限流 + 服务端签发的一次性令牌幂等）。
 
 设计与实测数据见 [`docs/M3-acceptance.md`](docs/M3-acceptance.md)。
+
+## 文档
+
+| 文件 | 内容 |
+|---|---|
+| [`docs/walkthrough.md`](docs/walkthrough.md) | 30 分钟讲清这个项目：问题 → 方案 → 取舍 → 实测 → 局限，附现场白板演练步骤 |
+| [`docs/qa.md`](docs/qa.md) | 15 个常见追问的回答，每个都落在"什么时候不成立" |
+| [`docs/M2-acceptance.md`](docs/M2-acceptance.md) | M2 核心闭环验收记录 |
+| [`docs/M3-acceptance.md`](docs/M3-acceptance.md) | M3 九条亮点的「加之前 vs 加之后」实测 |
+| [`docs/M4-loadtest.md`](docs/M4-loadtest.md) | 压测环境、复现命令、四组结果与瓶颈分析 |
 
 ## License
 
