@@ -13,20 +13,23 @@ WORKDIR /app
 # 每个构件等 60 秒超时，最后抛一个看不出原因的 PluginResolutionException。
 COPY maven-settings.xml /root/.m2/settings.xml
 
-# 先只拷 4 个 pom 再拉依赖：之后改 Java 代码不会让这一层缓存失效，重建快很多。
-# -DexcludeGroupIds=com.sr 排除本项目自己的三个模块 —— 这时候还没有它们的源码和 jar，
-# 不加这个参数 go-offline 会直接失败。
 COPY pom.xml .
 COPY sr-common/pom.xml sr-common/
 COPY sr-pojo/pom.xml sr-pojo/
 COPY sr-server/pom.xml sr-server/
-RUN mvn -B -DskipTests dependency:go-offline -DexcludeGroupIds=com.sr
 
-# 再拷源码（.dockerignore 已经把 target 排除掉了）
+# 源码（.dockerignore 已经把 target 排除掉了）
 COPY sr-common/src sr-common/src
 COPY sr-pojo/src sr-pojo/src
 COPY sr-server/src sr-server/src
-RUN mvn -B clean package -DskipTests
+
+# 一次编译搞定，不再单独跑 dependency:go-offline。
+# 那一步只是"提前把依赖拉进镜像层"的缓存优化，但在多模块工程里它要
+# 排除 reactor 自己的模块、还要单独解析插件，是最容易失败的一步 ——
+# 收益不值这个风险。改用 BuildKit 的缓存挂载：~/.m2 存在构建缓存里，
+# 重建时依赖不用重新下载，也不会把几百 MB 的仓库塞进镜像层。
+RUN --mount=type=cache,target=/root/.m2 \
+    mvn -B clean package -DskipTests
 
 # ---------- 阶段 2：运行镜像 ----------
 # 只用 JRE，镜像比 builder 小一个数量级，也没有 Maven 和源码
