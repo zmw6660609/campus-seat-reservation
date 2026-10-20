@@ -32,7 +32,7 @@ Dockerfile     text eol=lf
 .dockerignore  text eol=lf
 
 # .env 系列必须是 LF：CRLF 会让每行 value 结尾多一个 \r，
-# 密码变成 "332638\r"，看起来完全一样但认证失败，排查起来极其痛苦
+# 密码变成 "mypassword\r"，看起来完全一样但认证失败，排查起来极其痛苦
 .env           text eol=lf
 .env.example   text eol=lf
 
