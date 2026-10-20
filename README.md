@@ -119,6 +119,31 @@ Windows 下把 `./mvnw` 换成 `mvnw.cmd`。
 curl http://localhost:8080/health
 ```
 
+### 另一种方式：Docker Compose 一键起全栈
+
+本机不装 MySQL、Redis、JDK 也能跑，一条命令把三个服务全拉起来：
+
+```bash
+cp .env.example .env          # 填 MySQL root 密码和 JWT 密钥
+docker compose up -d --build
+curl http://localhost:8080/health
+```
+
+| 服务 | 地址 | 说明 |
+|---|---|---|
+| 应用 | `localhost:8080` | 多阶段构建：maven 镜像编译 → jre 镜像运行 |
+| MySQL | `localhost:13306` | 故意错开 3306，避免和本机已装的 MySQL 抢端口 |
+| Redis | `localhost:16379` | 开了 AOF，重启不丢延时队列和热榜 |
+
+三个容易踩的点：
+
+- **改了 `sql/*.sql` 必须 `docker compose down -v`** —— 初始化脚本只在数据卷为空时执行一次，
+  改完不重建数据卷，你会以为改动没生效。
+- **要求 Docker Compose V2**（`docker compose`，不是 `docker-compose`）。配置里用了
+  `depends_on: condition: service_healthy`，V1 不支持，会在 MySQL 还没能连的时候就把应用拉起来。
+- 容器内访问 Maven Central 会超时，仓库里带了 `maven-settings.xml`（阿里云镜像），
+  Dockerfile 已经用 `-s` 指过去了，不用额外配置。
+
 ### 排错：`JAVA_HOME is not defined correctly`
 
 `mvnw` 自己会下载 Maven，但**不会自己找 JDK**。如果机器上装了 JDK 却没配 `JAVA_HOME`
@@ -143,7 +168,10 @@ set JAVA_HOME=D:\path\to\jdk-17
       ZSet 延时队列超时释放、缓存与一致性（穿透 / 击穿 / 雪崩 + 延迟双删）、热门座位排行、
       令牌桶限流、幂等防重复提交
       → 每条都有「加之前 vs 加之后」的实测数据，见 [`docs/M3-acceptance.md`](docs/M3-acceptance.md)
-- [ ] **M4 完整与上线** —— RBAC 权限、统计报表、单元测试、Docker 部署上线
+- [x] **M4 工程化** —— RBAC 权限（3 表 + 5 个权限点 + 拦截器）、管理端预约查询与人工处理、
+      统计报表（上座率 / 预约趋势）、单元测试（10 个用例，纯 Mockito，不依赖 MySQL / Redis）、
+      Docker Compose 一键起全栈（MySQL + Redis + 应用）
+- [ ] **M4 上线** —— 部署到云服务器、压测报告
 
 ## 设计要点
 
